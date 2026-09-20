@@ -369,14 +369,26 @@ class Injector:
             self.kb.release(ch)
             time.sleep(self.char_delay)
 
-    def deliver(self, text: str, open_key: Hotkey | None, close_key: Hotkey | None) -> None:
+    def _enter(self) -> None:
+        self.kb.press(Key.enter)
+        self.kb.release(Key.enter)
+
+    def deliver(self, text: str, open_key: Hotkey | None, close_key: Hotkey | None,
+                close_command: str | None) -> None:
         if open_key is not None:
             self.press_hotkey(open_key)
             time.sleep(0.12)
         self.type_text(text)
         time.sleep(0.04)
-        self.kb.press(Key.enter)
-        self.kb.release(Key.enter)
+        self._enter()
+        if close_command:
+            # The box keeps focus after a send in gamepad style. This slash
+            # command clicks the addon's secure button, which lets Blizzard
+            # code deactivate the box; typed + Enter keeps it fully secure.
+            time.sleep(0.15)
+            self.type_text(close_command)
+            time.sleep(0.03)
+            self._enter()
         if close_key is not None:
             time.sleep(0.10)
             self.press_hotkey(close_key)
@@ -490,7 +502,7 @@ class Coordinator:
         self.close_key = None if self.args.close_key.lower() == "none" else Hotkey.parse(self.args.close_key)
         if self.close_key is None and self.args.close_key.lower() != "none":
             log(f"Can't parse --close-key '{self.args.close_key}'; not closing chat")
-        log(f"Settings: trigger={trigger or 'none'} open-chat={choice} close-chat={self.args.close_key}")
+        log(f"Settings: trigger={trigger or 'none'} open-chat={choice} close-command={self.args.close_command}")
         if not trigger and self.args.raw_button is None:
             log("No trigger yet. In game: /gps setup, then press a controller button.")
 
@@ -567,7 +579,8 @@ class Coordinator:
                 log(f"WoW is not the frontmost app ({frontmost_app_name()}); not typing")
                 self.sounds.play(self.sounds.error_tone)
                 return
-            self.injector.deliver(text, self.hotkey, self.close_key)
+            close_command = None if self.args.close_command.lower() == "none" else self.args.close_command
+            self.injector.deliver(text, self.hotkey, self.close_key, close_command)
             log("Sent")
         finally:
             self.state = self.IDLE
@@ -614,13 +627,16 @@ def main() -> None:
     ap.add_argument("--device", default="auto", help="Whisper device: auto, cpu, cuda")
     ap.add_argument("--compute-type", default="int8", help="Whisper compute type (default: int8)")
     ap.add_argument("--input-device", help="Mic device name or index for sounddevice")
+    ap.add_argument("--close-command", default="/click GamepadSpeakClose",
+                    help="Slash command typed after sending to leave the chat box (default: the addon's "
+                         "secure close button; 'none' to skip)")
     ap.add_argument("--close-key", default="none",
                     help="Extra key pressed after sending, e.g. ESCAPE. Default none: the box closes by itself "
                          "when chat was opened via the addon hotkey")
     ap.add_argument("--silent", action="store_true", help="No start/stop sounds")
-    ap.add_argument("--open-key", default="addon",
-                    help="Key that opens chat before typing: 'addon' (the addon's hotkey, default), ENTER "
-                         "(the game's Open Chat, but in gamepad style that leaves the chat frame in focus mode), "
+    ap.add_argument("--open-key", default="ENTER",
+                    help="Key that opens chat before typing: ENTER (the game's Open Chat, default), "
+                         "'addon' (the addon's hotkey; taints the gamepad UI in WoW Forever, avoid), "
                          "any binding like CTRL-SHIFT-F12, or 'none'")
     ap.add_argument("--max-seconds", type=float, default=60, help="Auto-stop recording after this long")
     ap.add_argument("--any-app", action="store_true", help="Type even if WoW is not the frontmost app")

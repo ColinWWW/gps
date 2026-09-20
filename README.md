@@ -104,16 +104,18 @@ restores as soon as they do and says so in chat.
   Forever uses, so the `PAD*` names in the addon map one-to-one to SDL buttons
   (PAD1 = A/Cross, PADSOCIAL = Create/View, PADBACK = touchpad click, and so
   on). An unrecognized pad can still be used with `--raw-button N`.
-- Helper → game: after transcription the helper presses the addon's hotkey
-  (default `CTRL-SHIFT-F12`, bound automatically on first login if free), waits
-  a frame, types the text, and presses Enter. The game's own Enter handler
-  sends and closes the box. Opening with the game's Enter binding instead
-  (`--open-key ENTER`) works too, but in gamepad style it puts the chat frame
-  into its focused mode, which only the Circle/B button leaves.
-- Why the addon never closes the box itself: in WoW Forever, clearing chat
-  focus from addon code runs into a protected gamepad call, and that taint
-  spreads into the gamepad binding stack and can freeze the client. The addon
-  therefore only observes the send; Blizzard code does the closing.
+- Helper → game: after transcription the helper presses Enter (the game's own
+  Open Chat binding), types the text, presses Enter to send, then types
+  `/click GamepadSpeakClose` and Enter. That last command clicks a secure
+  button the addon creates, whose snippet hides and re-shows the edit box, so
+  Blizzard's own code deactivates chat. Every step is a real key press handled
+  by Blizzard code, which is what keeps the gamepad UI happy.
+- Why it's done this way: in WoW Forever's gamepad style the chat box keeps
+  focus after a send (only Circle/B normally leaves it), and any attempt by
+  addon code to open or clear chat focus runs into a protected gamepad call.
+  That taint spreads into the gamepad binding stack and can freeze the client.
+  So the addon never touches chat focus itself; it only observes the send and
+  provides the secure button.
 - Safety: the helper only types when a World of Warcraft window is in the
   foreground (where the platform lets it check). Otherwise it logs the
   transcript and plays an error beep.
@@ -127,7 +129,8 @@ restores as soon as they do and says so in chat.
 --button PADSOCIAL     override the trigger from the addon
 --raw-button 4         raw joystick button index for unmapped pads
 --input-device NAME    pick a specific microphone
---open-key addon       key that opens chat before typing: addon (default), ENTER, a binding, or none
+--open-key ENTER       key that opens chat before typing: ENTER (default), a binding, or none
+--close-command CMD    slash command typed after sending (default: /click GamepadSpeakClose; none to skip)
 --close-key none       extra key pressed after sending, e.g. ESCAPE (default none)
 --silent               no beeps
 --max-seconds 60       auto-stop a forgotten recording
