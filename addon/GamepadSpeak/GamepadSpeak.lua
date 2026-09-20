@@ -277,30 +277,17 @@ local function DumpApi()
 end
 
 ------------------------------------------------------------------------
--- Secure "leave chat" button. In gamepad interface style the edit box keeps
--- focus after a send, and only Blizzard code may clear it (addon code taints
--- the gamepad binding stack). "/click GamepadSpeakClose", typed into the box
--- and sent with a real Enter, runs this snippet securely: hiding the edit box
--- deactivates it through Blizzard's own path, and showing it again keeps the
--- IM-style box visible.
+-- Leaving chat after a send. In gamepad interface style the edit box keeps
+-- focus until the Back button (Circle/B) is pressed. Blizzard routes that
+-- button through an override binding that clicks a named button, so the same
+-- thing can be done with a real keyboard: type "/click <that button>" into
+-- the chat box and press Enter. The /click slash command is secure and the
+-- handler is Blizzard code, so nothing is tainted. (SecureHandler snippets
+-- would be cleaner, but this beta client cannot compile them.)
 ------------------------------------------------------------------------
-local closer = CreateFrame("Button", "GamepadSpeakClose", UIParent, "SecureHandlerClickTemplate")
-closer:SetSize(1, 1)
-closer:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", -20, -20)
-closer:EnableMouse(false)
-closer.ready = false
-
-local function SetupCloser()
-	if closer.ready or InCombatLockdown() then return closer.ready end
-	local editBox = ChatFrame1EditBox or (DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.editBox)
-	if not editBox then return false end
-	closer:SetFrameRef("editbox", editBox)
-	local keepVisible = GetCVar("chatStyle") ~= "classic"
-	closer:SetAttribute("_onclick", keepVisible
-		and [[ local eb = self:GetFrameRef("editbox"); if eb then eb:Hide(); eb:Show() end ]]
-		or  [[ local eb = self:GetFrameRef("editbox"); if eb then eb:Hide() end ]])
-	closer.ready = true
-	return true
+local function ComputeCloseCommand()
+	local key = GAMEPAD_FACE_RIGHT or "PAD2"
+	return "/click InputFunctionBindingButton_" .. key .. " LeftButton 1"
 end
 
 ------------------------------------------------------------------------
@@ -423,7 +410,7 @@ local function ShowStatus()
 	msg("Trigger: " .. (DB.trigger and ButtonLabel(DB.trigger) or "|cffff5050not set|r (run /gps setup)"))
 	msg("Helper hotkey: " .. (DB.hotkey or "|cffff5050none|r"))
 	msg("Channel: " .. (DB.chatType or "last used (sticky)"))
-	msg("Secure close button: " .. (closer.ready and "ready (/click GamepadSpeakClose)" or "|cffff5050not set up|r"))
+	msg("Close command: " .. ComputeCloseCommand() .. " (PAD2 is bound to '" .. tostring(GetBindingAction("PAD2")) .. "')")
 	msg("Open chat on second press: " .. (DB.openOnPress and "on" or "off") .. " (off = helper opens it with Enter)")
 	msg("Using gamepad now: " .. tostring(IsUsingGamepad and IsUsingGamepad() or false)
 		.. ", active device: " .. tostring(C_GamePad and C_GamePad.GetActiveDeviceID and C_GamePad.GetActiveDeviceID() or "?"))
@@ -463,7 +450,7 @@ local function SlashHandler(input)
 	elseif cmd == "open" then
 		DB.openOnPress = (rest:lower() == "on") or nil
 		SaveToMacro()
-		msg("Secure close button: " .. (closer.ready and "ready (/click GamepadSpeakClose)" or "|cffff5050not set up|r"))
+		msg("Close command: " .. ComputeCloseCommand() .. " (PAD2 is bound to '" .. tostring(GetBindingAction("PAD2")) .. "')")
 	msg("Open chat on second press: " .. (DB.openOnPress and "on" or "off"))
 	elseif cmd == "hotkey" then
 		DB.hotkey = GetBindingKey("GAMEPADSPEAK_OPENCHAT")
@@ -507,7 +494,7 @@ local function Init()
 	local db = GetDB()
 	RestoreFromMacro()
 	ApplyObserverMode()
-	SetupCloser()
+	db.closeCommand = ComputeCloseCommand()
 	EnsureHotkey()
 	local editBox = GetEditBox()
 	if editBox then HookEditBox(editBox) end
@@ -530,7 +517,6 @@ events:SetScript("OnEvent", function(self, event, arg1, arg2)
 		end
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		ApplyObserverMode()
-		SetupCloser()
 		if macroDirty then SaveToMacro() end
 	elseif event == "UPDATE_MACROS" then
 		-- Macros can arrive from the server after the first login of a session.

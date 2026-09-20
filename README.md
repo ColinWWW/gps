@@ -106,16 +106,18 @@ restores as soon as they do and says so in chat.
   on). An unrecognized pad can still be used with `--raw-button N`.
 - Helper → game: after transcription the helper presses Enter (the game's own
   Open Chat binding), types the text, presses Enter to send, then types
-  `/click GamepadSpeakClose` and Enter. That last command clicks a secure
-  button the addon creates, whose snippet hides and re-shows the edit box, so
-  Blizzard's own code deactivates chat. Every step is a real key press handled
-  by Blizzard code, which is what keeps the gamepad UI happy.
+  `/click InputFunctionBindingButton_PAD2 LeftButton 1` and Enter. That is
+  exactly what the gamepad Back button does: Blizzard routes Circle/B through
+  an override binding that clicks that named button, and `/click` is a secure
+  slash command. Every step is a real key press handled by Blizzard code.
 - Why it's done this way: in WoW Forever's gamepad style the chat box keeps
-  focus after a send (only Circle/B normally leaves it), and any attempt by
-  addon code to open or clear chat focus runs into a protected gamepad call.
-  That taint spreads into the gamepad binding stack and can freeze the client.
-  So the addon never touches chat focus itself; it only observes the send and
-  provides the secure button.
+  focus after a send, and any attempt by addon code to open or clear chat
+  focus runs into a protected gamepad call. That taint spreads into the
+  gamepad binding stack and can freeze the client. SecureHandler snippets
+  would be the textbook answer, but this beta client cannot compile them
+  (`loadstring_untainted` is missing, another known client bug). So the addon
+  never touches chat focus itself; it only computes the close command from
+  Blizzard's key constant and stores it for the helper.
 - Safety: the helper only types when a World of Warcraft window is in the
   foreground (where the platform lets it check). Otherwise it logs the
   transcript and plays an error beep.
@@ -130,7 +132,7 @@ restores as soon as they do and says so in chat.
 --raw-button 4         raw joystick button index for unmapped pads
 --input-device NAME    pick a specific microphone
 --open-key ENTER       key that opens chat before typing: ENTER (default), a binding, or none
---close-command CMD    slash command typed after sending (default: /click GamepadSpeakClose; none to skip)
+--close-command CMD    slash command typed after sending (default auto = from the addon; none to skip)
 --close-key none       extra key pressed after sending, e.g. ESCAPE (default none)
 --silent               no beeps
 --max-seconds 60       auto-stop a forgotten recording

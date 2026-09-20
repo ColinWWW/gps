@@ -35,6 +35,7 @@ from pygame._sdl2 import controller as sdl_controller  # noqa: E402
 from pynput.keyboard import Controller as KeyboardController, Key  # noqa: E402
 
 SAMPLE_RATE = 16_000
+DEFAULT_CLOSE_COMMAND = "/click InputFunctionBindingButton_PAD2 LeftButton 1"
 SYSTEM = platform.system()  # "Darwin", "Windows", "Linux"
 
 
@@ -64,6 +65,7 @@ def default_wow_dir() -> Path:
 class AddonSettings:
     trigger: str | None = None
     hotkey: str | None = None
+    close_command: str | None = None
 
 
 class SavedVariables:
@@ -94,7 +96,8 @@ class SavedVariables:
             return False
         self._mtime = mtime
         text = p.read_text(encoding="utf-8", errors="replace")
-        new = AddonSettings(trigger=self._value("trigger", text), hotkey=self._value("hotkey", text))
+        new = AddonSettings(trigger=self._value("trigger", text), hotkey=self._value("hotkey", text),
+                            close_command=self._value("closeCommand", text))
         changed = new != self.settings
         self.settings = new
         return changed
@@ -502,7 +505,7 @@ class Coordinator:
         self.close_key = None if self.args.close_key.lower() == "none" else Hotkey.parse(self.args.close_key)
         if self.close_key is None and self.args.close_key.lower() != "none":
             log(f"Can't parse --close-key '{self.args.close_key}'; not closing chat")
-        log(f"Settings: trigger={trigger or 'none'} open-chat={choice} close-command={self.args.close_command}")
+        log(f"Settings: trigger={trigger or 'none'} open-chat={choice} close-command={self.close_command() or 'none'}")
         if not trigger and self.args.raw_button is None:
             log("No trigger yet. In game: /gps setup, then press a controller button.")
 
@@ -579,8 +582,7 @@ class Coordinator:
                 log(f"WoW is not the frontmost app ({frontmost_app_name()}); not typing")
                 self.sounds.play(self.sounds.error_tone)
                 return
-            close_command = None if self.args.close_command.lower() == "none" else self.args.close_command
-            self.injector.deliver(text, self.hotkey, self.close_key, close_command)
+            self.injector.deliver(text, self.hotkey, self.close_key, self.close_command())
             log("Sent")
         finally:
             self.state = self.IDLE
@@ -627,9 +629,10 @@ def main() -> None:
     ap.add_argument("--device", default="auto", help="Whisper device: auto, cpu, cuda")
     ap.add_argument("--compute-type", default="int8", help="Whisper compute type (default: int8)")
     ap.add_argument("--input-device", help="Mic device name or index for sounddevice")
-    ap.add_argument("--close-command", default="/click GamepadSpeakClose",
-                    help="Slash command typed after sending to leave the chat box (default: the addon's "
-                         "secure close button; 'none' to skip)")
+    ap.add_argument("--close-command", default="auto",
+                    help="Slash command typed after sending to leave the chat box. 'auto' (default) uses the one "
+                         "the addon computed (the gamepad Back button's click target), 'none' skips it, "
+                         "or give a command such as '/click InputFunctionBindingButton_PAD2 LeftButton 1'")
     ap.add_argument("--close-key", default="none",
                     help="Extra key pressed after sending, e.g. ESCAPE. Default none: the box closes by itself "
                          "when chat was opened via the addon hotkey")
