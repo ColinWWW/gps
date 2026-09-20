@@ -290,6 +290,23 @@ local function ComputeCloseCommand()
 	return "/click InputFunctionBindingButton_" .. key .. " LeftButton 1"
 end
 
+-- When the close command is sent, Blizzard's dispatcher still holds the command
+-- text in the box at the moment focus is lost, so its "deactivate on focus
+-- lost" check (text == "") fails and the box is left active with a "Say:"
+-- header. This notification fires first thing in OnEditFocusLost, through a
+-- secure wrapper, so blanking the box here makes Blizzard's own code finish
+-- the close exactly as a Circle/B press would. Only our command is touched.
+local focusLostOwner = {}
+if EventRegistry and EventRegistry.RegisterCallback then
+	EventRegistry:RegisterCallback("ChatFrame.OnEditBoxFocusLost", function(_, editBox)
+		if not editBox or not editBox.GetText then return end
+		local text = editBox:GetText()
+		if text and text:find("^/click InputFunctionBindingButton_") then
+			editBox:SetText("")
+		end
+	end, focusLostOwner)
+end
+
 ------------------------------------------------------------------------
 -- Controller observation
 ------------------------------------------------------------------------
