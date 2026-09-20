@@ -484,6 +484,14 @@ class Coordinator:
         self.record_start = 0.0
         self._lock = threading.Lock()
 
+    def close_command(self) -> str | None:
+        choice = self.args.close_command
+        if choice.lower() == "none":
+            return None
+        if choice.lower() == "auto":
+            return self.saved.settings.close_command or DEFAULT_CLOSE_COMMAND
+        return choice
+
     def apply_settings(self) -> None:
         trigger = self.args.button or self.saved.settings.trigger
         self.watcher.set_trigger(trigger, self.args.raw_button)
