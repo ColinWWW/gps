@@ -1,0 +1,9 @@
+## Interface: 16001
+## Title: GamepadSpeak
+## Notes: Push a controller button, talk, push again: your words land in chat. Pairs with the GamepadSpeak macOS helper.
+## Author: kubeden
+## Version: 0.1.0
+## SavedVariables: GamepadSpeakDB
+## IconTexture: Interface\Icons\Ability_Warrior_BattleShout
+
+GamepadSpeak.lua

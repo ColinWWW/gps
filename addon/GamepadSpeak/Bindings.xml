@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="GAMEPADSPEAK_OPENCHAT" category="ADDONS" header="GAMEPADSPEAK_HEADER">
+		GamepadSpeak_OpenChat()
+	</Binding>
+</Bindings>
