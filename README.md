@@ -4,6 +4,8 @@ Based on [kubeden/gps](https://github.com/kubeden/gps). This version adds an **i
 
 **Hold F8 → speak → release F8 → local Whisper transcription → WoW chat.**
 
+The default model is `tiny.en`, with English selected automatically, running on the CPU with `int8` compute. No NVIDIA CUDA libraries are required. Use `--model base.en` for the larger English model. GPU users with the required CUDA libraries installed can opt in with `--device cuda`.
+
 This is still a WoW addon **plus an external helper**. WoW addons cannot capture the microphone or run Whisper themselves. The helper must remain running. This source targets the original WoW Forever client (Interface 16001); other Retail/Classic versions have not been validated.
 
 ## Windows setup

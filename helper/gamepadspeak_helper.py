@@ -691,6 +691,7 @@ class Coordinator:
         with self._lock:
             if self.state == self.IDLE:
                 if not self.args.any_app and wow_is_frontmost() is not True:
+                    log(f"Trigger ignored: WoW is not detected in foreground ({frontmost_app_name() or 'unknown'})")
                     return
                 self.target = foreground_identity()
                 self.cancelled.clear()
@@ -824,8 +825,8 @@ def main() -> None:
     ap.add_argument("--button", help="Override the in-game trigger, e.g. F8, CTRL-F9 or PADSOCIAL")
     ap.add_argument("--raw-button", type=int, help="Use a raw joystick button index instead of an SDL mapping")
     ap.add_argument("--language", help="Speech language code, e.g. en or bg (default: auto-detect)")
-    ap.add_argument("--model", default="base", help="Whisper model: tiny, base, small, medium, large-v3 (default: base)")
-    ap.add_argument("--device", default="auto", help="Whisper device: auto, cpu, cuda")
+    ap.add_argument("--model", default="tiny.en", help="Whisper model: tiny.en, base.en, tiny, base, small, medium, large-v3 (default: tiny.en)")
+    ap.add_argument("--device", default="cpu", help="Whisper device: auto, cpu, cuda (default: cpu; no CUDA libraries required)")
     ap.add_argument("--compute-type", default="int8", help="Whisper compute type (default: int8)")
     ap.add_argument("--input-device", help="Mic device name or index for sounddevice")
     ap.add_argument("--close-command", default="auto",
@@ -844,6 +845,8 @@ def main() -> None:
     ap.add_argument("--any-app", action="store_true", help="Type even if WoW is not the frontmost app")
     ap.add_argument("--check", action="store_true", help="Print status and exit")
     args = ap.parse_args()
+    if args.language is None and args.model.endswith(".en"):
+        args.language = "en"
 
     if args.input_device is not None and args.input_device.isdigit():
         args.input_device = int(args.input_device)
