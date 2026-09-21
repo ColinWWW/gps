@@ -2,7 +2,7 @@
 --
 -- Flow (with the helper running):
 --   press trigger  -> helper starts recording, this addon shows "Recording"
---   press again    -> helper stops + transcribes, this addon opens the chat box
+--   release trigger -> helper stops + transcribes, this addon opens the chat box
 --   helper types the text and presses Enter -> message sent, box closed
 --
 -- The addon is the source of truth for settings. They live in GamepadSpeakDB
@@ -16,7 +16,7 @@ BINDING_NAME_GAMEPADSPEAK_OPENCHAT = "Open chat for voice text (used by the help
 
 local DEFAULT_HOTKEY = "CTRL-SHIFT-F12"
 local AWAIT_TIMEOUT = 8      -- seconds to wait for the helper's text before closing chat
-local RECORD_TIMEOUT = 90    -- seconds before a forgotten recording indicator clears itself
+local RECORD_TIMEOUT = 60    -- seconds before a forgotten recording indicator clears itself
 
 local PREFIX = "|cff69ccf0GamepadSpeak|r: "
 local function msg(text) print(PREFIX .. text) end
@@ -48,6 +48,7 @@ end
 -- State + indicator
 ------------------------------------------------------------------------
 local DB                      -- assigned late, see GetDB / lifecycle below
+local defaultTrigger = false
 local seen = {}               -- diagnostics: when the saved table became visible
 local observer                -- gamepad button observer frame, created below
 
@@ -63,6 +64,8 @@ local function GetDB()
 end
 local state = "idle"          -- idle | recording | awaiting
 local capturing = false
+local captureType = "keyboard"
+local triggerHeld = false
 local stateTimer
 
 local indicator = CreateFrame("Frame", "GamepadSpeakIndicator", UIParent)
@@ -108,7 +111,7 @@ end
 ------------------------------------------------------------------------
 local MACRO_NAME = "GPSpeak"
 local MACRO_ICON = 134400 -- INV_Misc_QuestionMark
-local PERSISTED_KEYS = { "trigger", "chatType", "openOnPress" }
+local PERSISTED_KEYS = { "trigger", "triggerType", "chatType", "openOnPress" }
 local macroDirty = false
 
 local function Serialize(db)
@@ -313,39 +316,40 @@ end
 observer = CreateFrame("Frame", "GamepadSpeakObserver", UIParent)
 observer:SetSize(1, 1)
 observer:SetPoint("CENTER")
-observer:EnableKeyboard(false)
+observer:EnableKeyboard(true)
+observer:SetFrameStrata("DIALOG")
 observer:Show()
 
 local function ApplyObserverMode()
 	-- Propagation can only be changed out of combat; retried on PLAYER_REGEN_ENABLED.
 	if InCombatLockdown() then return false end
-	if not observer.EnableGamePadButton then
-		msg("|cffff5050This client has no EnableGamePadButton on frames; the addon can't observe the controller.|r")
-		return false
-	end
-	observer:EnableGamePadButton(true)
+	if observer.EnableGamePadButton then observer:EnableGamePadButton(true) end
 	observer:SetPropagateKeyboardInput(not capturing)
 	return true
 end
 
 local function OnTriggerPressed()
+	if triggerHeld then return end
+	triggerHeld = true
 	if state == "idle" then
 		SetState("recording", RECORD_TIMEOUT, function() SetState("idle") end)
-	elseif state == "recording" then
-		if DB and DB.openOnPress then
-			GamepadSpeak_OpenChat()
-		else
-			SetState("awaiting", AWAIT_TIMEOUT, function() SetState("idle") end)
-		end
 	end
-	-- "awaiting": ignore presses until the text lands or the timeout fires.
+end
+
+local function OnTriggerReleased()
+	triggerHeld = false
+	if state == "recording" then
+		SetState("awaiting", AWAIT_TIMEOUT, function() SetState("idle") end)
+	end
 end
 
 local function FinishCapture(button)
 	capturing = false
 	ApplyObserverMode()
 
+	defaultTrigger = false
 	GetDB().trigger = button
+	GetDB().triggerType = captureType
 	SaveToMacro()
 	msg("Trigger set to " .. ButtonLabel(button) .. ".")
 
@@ -363,28 +367,70 @@ local function FinishCapture(button)
 end
 
 observer:SetScript("OnGamePadButtonDown", function(_, button)
-	if capturing then
+	if capturing and captureType == "gamepad" then
 		if IsStickDirection(button) then return end
 		FinishCapture(button)
 		return
 	end
-	if DB and DB.trigger and button == DB.trigger then
+	if not capturing and DB and DB.trigger and button == DB.trigger then
 		OnTriggerPressed()
 	end
 end)
 
-local function StartCapture()
+observer:SetScript("OnGamePadButtonUp", function(_, button)
+	if DB and button == DB.trigger then OnTriggerReleased() end
+end)
+
+local function KeyBinding(key)
+	local prefix = ""
+	if IsControlKeyDown() then prefix = prefix .. "CTRL-" end
+	if IsShiftKeyDown() then prefix = prefix .. "SHIFT-" end
+	if IsAltKeyDown() then prefix = prefix .. "ALT-" end
+	return prefix .. key
+end
+
+local function IsSupportedKey(key)
+	local fn = tonumber(key:match("^F(%d+)$"))
+	return (fn and fn >= 1 and fn <= 20) or key:match("^[A-Z0-9]$") or
+		({ INSERT=true, DELETE=true, HOME=true, END=true, PAGEUP=true, PAGEDOWN=true,
+		   UP=true, DOWN=true, LEFT=true, RIGHT=true })[key]
+end
+
+observer:SetScript("OnKeyDown", function(_, key)
+	if capturing and captureType == "keyboard" then
+		if key == "ESCAPE" then
+			capturing = false
+			ApplyObserverMode()
+			msg("Key selection cancelled.")
+		elseif IsSupportedKey(key) then
+			FinishCapture(KeyBinding(key))
+		end
+		return
+	end
+	if not capturing and DB and DB.trigger == KeyBinding(key) then OnTriggerPressed() end
+end)
+observer:SetScript("OnKeyUp", function(_, key)
+	if triggerHeld and DB then
+		local base = DB.trigger:match("([^%-]+)$")
+		if key == base or (DB.trigger:find("CTRL%-") and not IsControlKeyDown()) or
+		   (DB.trigger:find("SHIFT%-") and not IsShiftKeyDown()) or
+		   (DB.trigger:find("ALT%-") and not IsAltKeyDown()) then OnTriggerReleased() end
+	end
+end)
+
+local function StartCapture(kind)
 	if InCombatLockdown() then
 		msg("Can't run setup in combat. Try again after the fight.")
 		return
 	end
+	captureType = kind or "keyboard"
 	capturing = true
 	if not ApplyObserverMode() then
 		capturing = false
 		return
 	end
 	SetState("idle")
-	msg("Press the controller button you want to use for voice chat. A button with no game action is best (Create, Touchpad, or a D-pad direction you don't use).")
+	msg(captureType == "keyboard" and "Press a key (optionally with Ctrl/Shift/Alt). Escape cancels. Choosing a key saves and reloads the UI." or "Press a controller button. Choosing it saves and reloads the UI.")
 	C_Timer.After(30, function()
 		if capturing then
 			capturing = false
@@ -392,6 +438,49 @@ local function StartCapture()
 			msg("Setup timed out. Run /gps setup to try again.")
 		end
 	end)
+end
+
+------------------------------------------------------------------------
+-- In-game settings, also available directly through /gps settings.
+------------------------------------------------------------------------
+local settingsPanel = CreateFrame("Frame", "GamepadSpeakSettingsPanel", UIParent)
+settingsPanel.name = "GamepadSpeak"
+local title = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+title:SetPoint("TOPLEFT", 20, -20)
+title:SetText("GamepadSpeak — Hold to talk")
+local description = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+description:SetPoint("TOPLEFT", 20, -55)
+description:SetWidth(480)
+description:SetJustifyH("LEFT")
+description:SetText("Hold your chosen key to record. Release to transcribe and send to WoW chat. The external helper must be running. Choosing a new key saves and reloads the UI. Pick an unused key; existing game bindings still fire.")
+local currentKey = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+currentKey:SetPoint("TOPLEFT", 20, -150)
+settingsPanel:SetScript("OnShow", function()
+	currentKey:SetText("Current trigger: " .. (GetDB().trigger or "F8"))
+end)
+local changeKey = CreateFrame("Button", nil, settingsPanel, "UIPanelButtonTemplate")
+changeKey:SetSize(210, 28)
+changeKey:SetPoint("TOPLEFT", 20, -185)
+changeKey:SetText("Change keyboard key")
+changeKey:SetScript("OnClick", function() StartCapture("keyboard") end)
+local changePad = CreateFrame("Button", nil, settingsPanel, "UIPanelButtonTemplate")
+changePad:SetSize(210, 28)
+changePad:SetPoint("TOPLEFT", 20, -225)
+changePad:SetText("Change controller button")
+changePad:SetScript("OnClick", function() StartCapture("gamepad") end)
+local category
+if Settings and Settings.RegisterCanvasLayoutCategory then
+	category = Settings.RegisterCanvasLayoutCategory(settingsPanel, "GamepadSpeak")
+	Settings.RegisterAddOnCategory(category)
+elseif InterfaceOptions_AddCategory then
+	InterfaceOptions_AddCategory(settingsPanel)
+end
+settingsPanel:Hide()
+local function ShowSettings()
+	if InCombatLockdown() then msg("Open settings after combat."); return end
+	if category then Settings.OpenToCategory(category:GetID())
+	elseif InterfaceOptionsFrame_OpenToCategory then InterfaceOptionsFrame_OpenToCategory(settingsPanel)
+	else msg("Use /gps setup to change your key, or /gps gamepad for a controller.") end
 end
 
 ------------------------------------------------------------------------
@@ -428,7 +517,7 @@ local function ShowStatus()
 	msg("Helper hotkey: " .. (DB.hotkey or "|cffff5050none|r"))
 	msg("Channel: " .. (DB.chatType or "last used (sticky)"))
 	msg("Close command: " .. ComputeCloseCommand() .. " (PAD2 is bound to '" .. tostring(GetBindingAction("PAD2")) .. "')")
-	msg("Open chat on second press: " .. (DB.openOnPress and "on" or "off") .. " (off = helper opens it with Enter)")
+	msg("Legacy open setting (unused in hold mode): " .. (DB.openOnPress and "on" or "off") .. " (off = helper opens it with Enter)")
 	msg("Using gamepad now: " .. tostring(IsUsingGamepad and IsUsingGamepad() or false)
 		.. ", active device: " .. tostring(C_GamePad and C_GamePad.GetActiveDeviceID and C_GamePad.GetActiveDeviceID() or "?"))
 end
@@ -440,8 +529,12 @@ local function SlashHandler(input)
 	cmd = cmd:lower()
 
 	if cmd == "setup" then
-		StartCapture()
-	elseif cmd == "status" or cmd == "" then
+		StartCapture("keyboard")
+	elseif cmd == "gamepad" then
+		StartCapture("gamepad")
+	elseif cmd == "settings" or cmd == "" then
+		ShowSettings()
+	elseif cmd == "status" then
 		ShowStatus()
 	elseif cmd == "test" then
 		local text = rest ~= "" and rest or "GamepadSpeak test message"
@@ -468,7 +561,7 @@ local function SlashHandler(input)
 		DB.openOnPress = (rest:lower() == "on") or nil
 		SaveToMacro()
 		msg("Close command: " .. ComputeCloseCommand() .. " (PAD2 is bound to '" .. tostring(GetBindingAction("PAD2")) .. "')")
-	msg("Open chat on second press: " .. (DB.openOnPress and "on" or "off"))
+	msg("Legacy open setting (unused in hold mode): " .. (DB.openOnPress and "on" or "off"))
 	elseif cmd == "hotkey" then
 		DB.hotkey = GetBindingKey("GAMEPADSPEAK_OPENCHAT")
 		msg("Helper hotkey: " .. (DB.hotkey or "|cffff5050none|r") .. ". Type /reload so the helper reads it.")
@@ -481,7 +574,9 @@ local function SlashHandler(input)
 		msg("Settings cleared. Run /gps setup.")
 	else
 		msg("Commands:")
-		msg("  /gps setup   - pick the controller trigger button")
+		msg("  /gps settings - open the in-game settings panel")
+		msg("  /gps setup   - pick the keyboard trigger key")
+		msg("  /gps gamepad - pick the controller trigger button")
 		msg("  /gps status  - show current settings")
 		msg("  /gps test [text] - send text through the same path the helper uses")
 		msg("  /gps channel <say|party|raid|guild|officer|instance|sticky>")
@@ -510,15 +605,16 @@ events:RegisterEvent("UPDATE_MACROS")
 local function Init()
 	local db = GetDB()
 	RestoreFromMacro()
+	if not db.trigger then db.trigger = "F8"; db.triggerType = "keyboard"; defaultTrigger = true end
 	ApplyObserverMode()
-	db.closeCommand = ComputeCloseCommand()
+	db.closeCommand = db.trigger:match("^PAD") and ComputeCloseCommand() or "none"
 	EnsureHotkey()
 	local editBox = GetEditBox()
 	if editBox then HookEditBox(editBox) end
 	if db.trigger then
-		msg("Trigger: " .. ButtonLabel(db.trigger) .. ". Start the helper and press it to record.")
+		msg("Trigger: " .. ButtonLabel(db.trigger) .. ". Start the helper; hold to record, release to send. /gps opens settings.")
 	else
-		msg("No trigger button yet. Type /gps setup and press a controller button.")
+		msg("Type /gps settings to choose your hold-to-talk key.")
 	end
 end
 
@@ -537,9 +633,15 @@ events:SetScript("OnEvent", function(self, event, arg1, arg2)
 		if macroDirty then SaveToMacro() end
 	elseif event == "UPDATE_MACROS" then
 		-- Macros can arrive from the server after the first login of a session.
+		if DB and defaultTrigger then
+			DB.trigger = nil
+			DB.triggerType = nil
+		end
 		if DB and not DB.trigger and RestoreFromMacro() and DB.trigger then
+			defaultTrigger = false
 			msg("Settings restored from macro. Trigger: " .. ButtonLabel(DB.trigger) .. ".")
 		end
+		if DB and not DB.trigger then DB.trigger = "F8"; DB.triggerType = "keyboard" end
 	elseif event == "ADDON_ACTION_FORBIDDEN" and arg1 == ADDON_NAME then
 		if tostring(arg2):find("Reload") then
 			msg("The client refused the automatic reload. Type |cffffd100/reload|r to save the trigger for the helper.")

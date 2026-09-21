@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """GamepadSpeak helper for WoW Forever. Cross-platform (macOS, Windows, Linux).
 
-Press the trigger button: start recording the mic.
-Press again: stop, transcribe locally with Whisper, then open the WoW chat box,
+Hold the trigger key/button: record the mic.
+Release: stop, transcribe locally with Whisper, then open the WoW chat box,
 type the text and press Enter. The game only ever sees ordinary key presses.
 
 Settings (trigger button, hotkey) come from the addon's SavedVariables file,
@@ -15,6 +15,7 @@ import argparse
 import ctypes
 import os
 import platform
+import queue
 import re
 import subprocess
 import sys
@@ -32,7 +33,7 @@ import numpy as np  # noqa: E402
 import pygame  # noqa: E402
 import sounddevice as sd  # noqa: E402
 from pygame._sdl2 import controller as sdl_controller  # noqa: E402
-from pynput.keyboard import Controller as KeyboardController, Key  # noqa: E402
+from pynput.keyboard import Controller as KeyboardController, Key, Listener  # noqa: E402
 
 SAMPLE_RATE = 16_000
 DEFAULT_CLOSE_COMMAND = "/click InputFunctionBindingButton_PAD2 LeftButton 1"
@@ -65,6 +66,7 @@ def default_wow_dir() -> Path:
 class AddonSettings:
     trigger: str | None = None
     hotkey: str | None = None
+    trigger_type: str | None = None
     close_command: str | None = None
 
 
@@ -96,7 +98,7 @@ class SavedVariables:
             return False
         self._mtime = mtime
         text = p.read_text(encoding="utf-8", errors="replace")
-        new = AddonSettings(trigger=self._value("trigger", text), hotkey=self._value("hotkey", text),
+        new = AddonSettings(trigger=self._value("trigger", text), trigger_type=self._value("triggerType", text), hotkey=self._value("hotkey", text),
                             close_command=self._value("closeCommand", text))
         changed = new != self.settings
         self.settings = new
@@ -164,8 +166,10 @@ TRIGGER_AXIS_THRESHOLD = 16_000  # of 32767
 class ControllerWatcher:
     """Polls SDL on the calling thread (SDL wants the main thread on macOS)."""
 
-    def __init__(self, on_press):
+    def __init__(self, on_press, on_release=lambda: None):
         self.on_press = on_press
+        self.on_release = on_release
+        self._held = set()
         self.trigger: str | None = None
         self.raw_button: int | None = None
         self._button_const: int | None = None
@@ -177,6 +181,7 @@ class ControllerWatcher:
 
     def set_trigger(self, trigger: str | None, raw_button: int | None = None) -> None:
         self.trigger = trigger
+        self._held.clear()
         self.raw_button = raw_button
         self._button_const = self._axis_const = None
         if raw_button is not None:
@@ -217,34 +222,35 @@ class ControllerWatcher:
         except pygame.error as e:
             log(f"Could not open device {device_index}: {e}")
 
-    def _fire(self) -> None:
-        now = time.monotonic()
-        if now - self._last_press < 0.25:
-            return
-        self._last_press = now
-        self.on_press()
+    def _edge(self, device, pressed: bool) -> None:
+        was_down = bool(self._held)
+        if pressed:
+            self._held.add(device)
+        else:
+            self._held.discard(device)
+        if bool(self._held) != was_down:
+            (self.on_press if self._held else self.on_release)()
 
     def pump(self) -> None:
         for event in pygame.event.get():
             if event.type == pygame.CONTROLLERDEVICEADDED:
                 self._open(event.device_index)
-            elif event.type == pygame.CONTROLLERDEVICEREMOVED:
+            elif event.type in (pygame.CONTROLLERDEVICEREMOVED, pygame.JOYDEVICEREMOVED):
                 self._controllers.pop(event.instance_id, None)
+                self._joysticks.pop(event.instance_id, None)
+                self._edge(event.instance_id, False)
                 log("Controller disconnected")
             elif event.type == pygame.JOYDEVICEADDED and self.raw_button is not None:
                 self._open(event.device_index)
-            elif event.type == pygame.CONTROLLERBUTTONDOWN and self._button_const is not None:
-                if event.button == self._button_const:
-                    self._fire()
+            elif event.type in (pygame.CONTROLLERBUTTONDOWN, pygame.CONTROLLERBUTTONUP):
+                if self._button_const is not None and event.button == self._button_const:
+                    self._edge(event.instance_id, event.type == pygame.CONTROLLERBUTTONDOWN)
             elif event.type == pygame.CONTROLLERAXISMOTION and self._axis_const is not None:
                 if event.axis == self._axis_const:
-                    pressed = event.value > TRIGGER_AXIS_THRESHOLD
-                    if pressed and not self._axis_active:
-                        self._fire()
-                    self._axis_active = pressed
-            elif event.type == pygame.JOYBUTTONDOWN and self.raw_button is not None:
-                if event.button == self.raw_button:
-                    self._fire()
+                    self._edge(event.instance_id, event.value > TRIGGER_AXIS_THRESHOLD)
+            elif event.type in (pygame.JOYBUTTONDOWN, pygame.JOYBUTTONUP):
+                if self.raw_button is not None and event.button == self.raw_button:
+                    self._edge(event.instance_id, event.type == pygame.JOYBUTTONDOWN)
 
     def describe(self) -> list[str]:
         out = [f"{c.name} (mapped)" for c in self._controllers.values()]
@@ -269,7 +275,12 @@ class Recorder:
             samplerate=SAMPLE_RATE, channels=1, dtype="float32",
             device=self.device, blocksize=1024, callback=self._callback,
         )
-        self._stream.start()
+        try:
+            self._stream.start()
+        except Exception:
+            self._stream.close()
+            self._stream = None
+            raise
 
     def _callback(self, indata, frames, time_info, status) -> None:
         if status:
@@ -279,9 +290,11 @@ class Recorder:
 
     def stop(self) -> np.ndarray:
         if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+            try:
+                self._stream.stop()
+            finally:
+                self._stream.close()
+                self._stream = None
         with self._lock:
             audio = np.concatenate(self._chunks) if self._chunks else np.zeros(0, dtype="float32")
             self._chunks = []
@@ -350,6 +363,64 @@ class Hotkey:
         return cls(key=key, modifiers=tuple(mods))
 
 
+class KeyboardWatcher:
+    """Listener callbacks only enqueue events; audio/state run on the main thread."""
+
+    def __init__(self, on_press, on_release):
+        self.on_press, self.on_release = on_press, on_release
+        self.events = queue.SimpleQueue()
+        self.down = set()
+        self.active = False
+        self.binding = set()
+        self.listener = None
+
+    @staticmethod
+    def name(key):
+        name = getattr(key, "name", None)
+        if name:
+            for prefix in ("ctrl", "shift", "alt", "cmd"):
+                if name == prefix or name in (prefix + "_l", prefix + "_r"):
+                    return {"cmd": "META"}.get(prefix, prefix.upper())
+            return {"esc": "ESCAPE", "page_up": "PAGEUP", "page_down": "PAGEDOWN"}.get(name, name.upper())
+        # Windows provides virtual keys even for Ctrl+letter control characters.
+        vk = getattr(key, "vk", None)
+        if vk is not None and 0x30 <= vk <= 0x5A:
+            return chr(vk)
+        return (getattr(key, "char", None) or "").upper()
+
+    def set_trigger(self, binding):
+        self.binding = set(binding.upper().split("-")) if binding else set()
+        self.down.clear()
+        self.active = False
+
+    def start(self):
+        self.listener = Listener(
+            on_press=lambda k: self.events.put((k, True)),
+            on_release=lambda k: self.events.put((k, False)),
+        )
+        self.listener.start()
+
+    def pump(self):
+        while not self.events.empty():
+            key, pressed = self.events.get()
+            # Track physical left/right modifiers independently.
+            if pressed:
+                self.down.add(key)
+            else:
+                self.down.discard(key)
+            names = {self.name(k) for k in self.down}
+            active = bool(self.binding) and self.binding <= names
+            if active != self.active:
+                self.active = active
+                (self.on_press if active else self.on_release)()
+        if self.listener is not None and not self.listener.is_alive():
+            raise RuntimeError("Keyboard listener stopped; restart the helper")
+
+    def stop(self):
+        if self.listener:
+            self.listener.stop()
+
+
 class Injector:
     def __init__(self, char_delay: float = 0.002):
         self.kb = KeyboardController()
@@ -366,8 +437,10 @@ class Injector:
             time.sleep(0.005)
             self.kb.release(m)
 
-    def type_text(self, text: str) -> None:
+    def type_text(self, text: str, allowed=lambda: True) -> None:
         for ch in text:
+            if not allowed():
+                raise RuntimeError("Typing cancelled: WoW lost focus")
             self.kb.press(ch)
             self.kb.release(ch)
             time.sleep(self.char_delay)
@@ -377,22 +450,28 @@ class Injector:
         self.kb.release(Key.enter)
 
     def deliver(self, text: str, open_key: Hotkey | None, close_key: Hotkey | None,
-                close_command: str | None) -> None:
+                close_command: str | None, allowed=lambda: True) -> None:
+        if not allowed():
+            return
         if open_key is not None:
             self.press_hotkey(open_key)
             time.sleep(0.12)
-        self.type_text(text)
+        self.type_text(text, allowed)
         time.sleep(0.04)
+        if not allowed():
+            return
         self._enter()
         if close_command:
             # The box keeps focus after a send in gamepad style. This slash
             # command clicks the addon's secure button, which lets Blizzard
             # code deactivate the box; typed + Enter keeps it fully secure.
             time.sleep(0.15)
-            self.type_text(close_command)
+            self.type_text(close_command, allowed)
             time.sleep(0.03)
+            if not allowed():
+                return
             self._enter()
-        if close_key is not None:
+        if close_key is not None and allowed():
             time.sleep(0.10)
             self.press_hotkey(close_key)
 
@@ -414,6 +493,9 @@ def frontmost_app_name() -> str | None:
                 return out.stdout.strip() or None
         if SYSTEM == "Windows":
             user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+            user32.GetForegroundWindow.restype = ctypes.c_void_p
+            user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+            user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
             hwnd = user32.GetForegroundWindow()
             length = user32.GetWindowTextLengthW(hwnd)
             buf = ctypes.create_unicode_buffer(length + 1)
@@ -426,6 +508,14 @@ def frontmost_app_name() -> str | None:
     except Exception:
         return None
     return None
+
+
+def foreground_identity():
+    if SYSTEM == "Windows":
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
+        return user32.GetForegroundWindow()
+    return frontmost_app_name()
 
 
 def wow_is_frontmost() -> bool | None:
@@ -473,7 +563,11 @@ class Coordinator:
     def __init__(self, args):
         self.args = args
         self.saved = SavedVariables(Path(args.wow_dir))
-        self.watcher = ControllerWatcher(self.on_trigger)
+        self.watcher = ControllerWatcher(self.on_trigger, self.on_release)
+        self.keyboard = KeyboardWatcher(self.on_trigger, self.on_release)
+        self.trigger_type = "keyboard"
+        self.target = None
+        self.cancelled = threading.Event()
         self.recorder = Recorder(device=args.input_device)
         self.injector = Injector()
         self.sounds = Sounds(not args.silent)
@@ -486,15 +580,21 @@ class Coordinator:
 
     def close_command(self) -> str | None:
         choice = self.args.close_command
+        if choice.lower() == "auto" and self.trigger_type == "keyboard":
+            return None
         if choice.lower() == "none":
             return None
         if choice.lower() == "auto":
-            return self.saved.settings.close_command or DEFAULT_CLOSE_COMMAND
+            return (None if self.saved.settings.close_command == "none" else
+                    self.saved.settings.close_command or DEFAULT_CLOSE_COMMAND)
         return choice
 
     def apply_settings(self) -> None:
-        trigger = self.args.button or self.saved.settings.trigger
-        self.watcher.set_trigger(trigger, self.args.raw_button)
+        trigger = self.args.button or self.saved.settings.trigger or "F8"
+        self.trigger_type = ("gamepad" if self.args.raw_button is not None or trigger.startswith("PAD")
+                             else "keyboard")
+        self.watcher.set_trigger(trigger if self.trigger_type == "gamepad" else None, self.args.raw_button)
+        self.keyboard.set_trigger(trigger if self.trigger_type == "keyboard" else None)
         # How the chat box gets opened before typing. Default is the game's own
         # Enter binding (OPENCHAT), which keeps addon code out of the chat path.
         choice = self.args.open_key
@@ -514,28 +614,33 @@ class Coordinator:
         if self.close_key is None and self.args.close_key.lower() != "none":
             log(f"Can't parse --close-key '{self.args.close_key}'; not closing chat")
         log(f"Settings: trigger={trigger or 'none'} open-chat={choice} close-command={self.close_command() or 'none'}")
-        if not trigger and self.args.raw_button is None:
-            log("No trigger yet. In game: /gps setup, then press a controller button.")
+
 
     def run(self) -> None:
         self.transcriber = Transcriber(self.args.model, self.args.language, self.args.device, self.args.compute_type)
         self.saved.refresh()
         if self.saved.path is None:
             log(f"Addon settings file not found under {self.saved.wow_dir / 'WTF'}. "
-                "Install the addon, run /gps setup in game (it reloads the UI to save).")
+                "Using F8 by default. Install the addon and use /gps settings to change it.")
         self.apply_settings()
         self.watcher.start()
-        log("Ready. Press the trigger to start recording.")
+        self.keyboard.start()
+        log("Ready. Hold the trigger to record; release to transcribe and send.")
 
         last_poll = 0.0
         while True:
             self.watcher.pump()
+            self.keyboard.pump()
             now = time.monotonic()
             if now - last_poll > 2.0:
                 last_poll = now
                 if self.saved.refresh():
                     log("Addon settings changed")
+                    self.cancel_recording()
                     self.apply_settings()
+            if self.state in (self.RECORDING, self.FINALIZING) and not self.args.any_app:
+                if wow_is_frontmost() is not True or foreground_identity() != self.target:
+                    self.cancel_recording()
             if self.state == self.RECORDING and now - self.record_start > self.args.max_seconds:
                 log("Max duration reached, stopping")
                 self.end_recording()
@@ -544,11 +649,30 @@ class Coordinator:
     def on_trigger(self) -> None:
         with self._lock:
             if self.state == self.IDLE:
+                if not self.args.any_app and wow_is_frontmost() is not True:
+                    return
+                self.target = foreground_identity()
+                self.cancelled.clear()
                 self.begin_recording()
-            elif self.state == self.RECORDING:
+
+    def on_release(self) -> None:
+        with self._lock:
+            if self.state == self.RECORDING:
                 self.end_recording()
-            else:
-                log("Still finalizing, ignoring press")
+
+    def cancel_recording(self):
+        self.cancelled.set()
+        if self.state == self.RECORDING:
+            try:
+                self.recorder.stop()
+            finally:
+                self.state = self.IDLE
+            log("Recording cancelled (focus or settings changed)")
+
+    def close(self):
+        self.cancel_recording()
+        self.keyboard.stop()
+        pygame.quit()
 
     def begin_recording(self) -> None:
         try:
@@ -566,7 +690,12 @@ class Coordinator:
         if self.state != self.RECORDING:
             return
         self.state = self.FINALIZING
-        audio = self.recorder.stop()
+        try:
+            audio = self.recorder.stop()
+        except Exception as e:
+            self.state = self.IDLE
+            log(f"Could not stop audio: {e}")
+            return
         self.sounds.play(self.sounds.stop_tone)
         log(f"Stopped after {time.monotonic() - self.record_start:.1f}s, transcribing...")
         threading.Thread(target=self._finish, args=(audio,), daemon=True).start()
@@ -586,12 +715,32 @@ class Coordinator:
                 return
             log(f"Transcript ({ms}ms): {text}")
             front = wow_is_frontmost()
-            if front is False and not self.args.any_app:
+            if self.cancelled.is_set():
+                log("Transcript discarded after focus/settings change")
+                return
+            if not self.args.any_app and (front is not True or foreground_identity() != self.target):
                 log(f"WoW is not the frontmost app ({frontmost_app_name()}); not typing")
                 self.sounds.play(self.sounds.error_tone)
                 return
-            self.injector.deliver(text, self.hotkey, self.close_key, self.close_command())
-            log("Sent")
+            # Never inject while the user still holds Ctrl/Alt/Shift or the
+            # trigger (including after the recording duration cap).
+            deadline = time.monotonic() + 5
+            while self.keyboard.active or self.watcher._held or any(
+                self.keyboard.name(k) in {"CTRL", "SHIFT", "ALT", "META"}
+                for k in tuple(self.keyboard.down)
+            ):
+                if self.cancelled.is_set() or time.monotonic() > deadline:
+                    log("Not typing while trigger/modifiers remain held")
+                    return
+                time.sleep(0.01)
+            def delivery_allowed():
+                return not self.cancelled.is_set() and (self.args.any_app or (
+                    wow_is_frontmost() is True and foreground_identity() == self.target))
+            self.injector.deliver(text, self.hotkey, self.close_key, self.close_command(), delivery_allowed)
+            log("Delivery finished")
+        except Exception as e:
+            log(f"Could not deliver transcript: {e}")
+            self.sounds.play(self.sounds.error_tone)
         finally:
             self.state = self.IDLE
 
@@ -606,7 +755,7 @@ def run_check(args) -> None:
     print(f"Platform:       {SYSTEM} / Python {platform.python_version()} / pygame {pygame.version.ver} (SDL {'.'.join(map(str, pygame.get_sdl_version()))})")
     print(f"WoW dir:        {args.wow_dir} {'(ok)' if Path(args.wow_dir).exists() else '(MISSING)'}")
     print(f"Settings file:  {saved.path or 'not found'}")
-    trigger = args.button or saved.settings.trigger
+    trigger = args.button or saved.settings.trigger or "F8"
     print(f"Trigger:        {trigger or 'none'}")
     hk = saved.settings.hotkey
     print(f"Hotkey:         {hk or 'none'} -> {'parsed' if hk and Hotkey.parse(hk) else 'unparsed'}")
@@ -628,9 +777,9 @@ def run_check(args) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="GamepadSpeak helper: controller-triggered voice to WoW chat")
+    ap = argparse.ArgumentParser(description="GamepadSpeak helper: hold-to-talk voice to WoW chat")
     ap.add_argument("--wow-dir", default=str(default_wow_dir()), help="WoW flavor directory (the _classic_beta_ folder)")
-    ap.add_argument("--button", help="Override the trigger button from the addon, e.g. PADSOCIAL")
+    ap.add_argument("--button", help="Override the in-game trigger, e.g. F8, CTRL-F9 or PADSOCIAL")
     ap.add_argument("--raw-button", type=int, help="Use a raw joystick button index instead of an SDL mapping")
     ap.add_argument("--language", help="Speech language code, e.g. en or bg (default: auto-detect)")
     ap.add_argument("--model", default="base", help="Whisper model: tiny, base, small, medium, large-v3 (default: base)")
@@ -657,14 +806,20 @@ def main() -> None:
     if args.input_device is not None and args.input_device.isdigit():
         args.input_device = int(args.input_device)
 
+    if args.max_seconds <= 0:
+        ap.error("--max-seconds must be positive")
+
     if args.check:
         run_check(args)
         return
 
+    coordinator = Coordinator(args)
     try:
-        Coordinator(args).run()
+        coordinator.run()
     except KeyboardInterrupt:
         log("Bye")
+    finally:
+        coordinator.close()
 
 
 if __name__ == "__main__":

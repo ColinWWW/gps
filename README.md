@@ -1,168 +1,52 @@
-# GamepadSpeak for WoW Forever
+# GamepadSpeak — WoW hold-to-talk
 
-Press a controller button, talk, press it again. Your words are typed into
-chat and sent, and the chat box closes. No keyboard, no pause in play.
+Based on [kubeden/gps](https://github.com/kubeden/gps). This version adds an **in-game settings panel**, keyboard triggers, and **hold-to-talk** for keyboard and controller input.
 
-Two parts:
+**Hold F8 → speak → release F8 → local Whisper transcription → WoW chat.**
 
-- `addon/GamepadSpeak` runs inside WoW Forever (the `_classic_beta_` client).
-  It owns the settings, shows a small "Recording / Transcribing" indicator,
-  opens the chat box at the right moment, and closes it after the text is sent.
-- `helper/` is a small Python program that runs next to the game on macOS,
-  Windows, or Linux. It watches the same controller button, records the mic,
-  transcribes locally with Whisper, then types the text into the game and
-  presses Enter.
+This is still a WoW addon **plus an external helper**. WoW addons cannot capture the microphone or run Whisper themselves. The helper must remain running. This source targets the original WoW Forever client (Interface 16001); other Retail/Classic versions have not been validated.
 
-A WoW addon cannot hear the microphone or run speech recognition, which is why
-the helper exists. The game never sees anything except ordinary key presses,
-and no audio leaves your PC.
+## Windows setup
 
-## Install
+1. Install Python 3.12 or 3.13 if you are running from source.
+2. Close WoW, extract this repository, and run `install.ps1` in PowerShell. If necessary, set `$env:WOW_DIR` to your WoW `_classic_beta_` directory first.
+3. Enable GamepadSpeak in WoW and run `/gps` (or `/gps settings`). The panel is also under **Options → AddOns → GamepadSpeak** where supported.
+4. F8 is the default. Click **Change keyboard key**, then press your desired key, optionally with Ctrl, Shift, or Alt. **Selecting the key saves it and reloads the UI.** Escape cancels. The helper reads the saved setting within about two seconds. If the client refuses the automatic reload, type `/reload`.
+5. Run `run-helper.ps1`. On first launch it downloads the selected Whisper model; wait for **Ready** before speaking.
+6. With WoW focused, hold your trigger while speaking, then release. The helper opens chat, types the result and sends it with Enter.
 
-macOS / Linux:
+Supported keyboard keys: F1–F20, A–Z, 0–9, Insert/Delete, Home/End, Page Up/Down, and arrow keys, with optional Ctrl/Shift/Alt. Use an unused key: existing game actions are not unbound. Mouse buttons are not implemented. Release modifiers too before delivery.
 
-```
-./install.sh
-```
+For a controller, click **Change controller button**, or use `/gps gamepad`. Controller buttons and trigger axes now also use hold/release instead of toggle. The original gamepad chat-closing workaround remains enabled for controller triggers; keyboard triggers use normal Enter-to-send.
 
-Windows (PowerShell):
+## Options and troubleshooting
 
-```
-.\install.ps1
-```
+- `/gps setup`: choose a keyboard key and reload.
+- `/gps status`: inspect settings.
+- `run-helper.ps1 --check`: inspect microphone, settings path and foreground detection.
+- `run-helper.ps1 --input-device "Microphone name"`: select a microphone.
+- `run-helper.ps1 --model small --language en`: choose recognition settings.
+- `run-helper.ps1 --wow-dir "C:\path\to\_classic_beta_"`: point the helper at the same WoW installation as the addon.
+- `run-helper.ps1 --button F9`: temporary helper-only override; normally use the in-game setting so the indicator agrees.
 
-That copies the addon into `Interface/AddOns` of WoW Forever and prepares the
-helper's Python environment. Re-run it after editing the addon. (It is a copy
-rather than a symlink on purpose: the client did not load saved variables for
-a symlinked addon folder.)
-Set `WOW_DIR` first if your install is somewhere else. The helper needs Python
-3.10 to 3.13; [uv](https://docs.astral.sh/uv/) is used when present, otherwise
-a plain venv is created on first run.
+Recording starts only when WoW is detected in the foreground. Leaving WoW cancels the recording or pending delivery. Failure to identify the foreground window also prevents recording. Recordings are capped at 60 seconds by default. If the trigger/modifiers remain held for five seconds after transcription, delivery is discarded. Empty speech, microphone and transcription failures return the helper to idle.
 
-## First-time setup
+The addon indicator is approximate: it cannot receive success/failure acknowledgments from the external helper. It may show “Transcribing” briefly after cancelled or empty speech. The original beta's settings-macro backup is preserved; do not edit the `GPSpeak` macro.
 
-1. Start WoW Forever with the controller connected. Enable GamepadSpeak in the
-   addon list (tick "Load out of date AddOns" if the beta build number moved).
-2. In game: `/gps setup`, then press the controller button you want as the
-   trigger. Pick one with no game action: Create, the touchpad click, or a spare
-   D-pad direction. The addon saves it and reloads the UI.
-3. Start the helper:
+The helper records/transcribes locally. Model downloads need internet; audio is not uploaded. Transcripts appear in the helper console and are sent to WoW chat.
 
-   ```
-   ./run-helper.sh            # macOS / Linux
-   .\run-helper.ps1           # Windows
-   ```
+## Windows executable build
 
-   The first run downloads the Whisper model (about 150 MB for `base`).
-   On macOS the terminal you run it from needs Microphone and Accessibility
-   permission (System Settings > Privacy & Security). On Linux, keystroke
-   injection needs X11 (or XWayland) and `xdotool` for the foreground check.
-4. Check everything lines up:
+The **Build Windows helper** GitHub Actions workflow builds a console `.exe` and its dependency folder. Run it from the repository's Actions tab, then download the `GamepadSpeak-Windows` artifact. Keep the executable with all files in its folder; copy `addon/GamepadSpeak` into WoW's `Interface/AddOns` directory. The `.exe` accepts the same helper options, including `--wow-dir`.
 
-   ```
-   ./run-helper.sh --check
-   ```
+A successful workflow run is required before claiming a working executable. Live microphone capture, key delivery, and addon behavior must still be checked inside WoW on Windows.
 
-## Using it
+## Development checks
 
-- Press the trigger: a short high beep, and the game shows "Recording".
-- Say your message.
-- Press the trigger again: a two-note beep, the game shows "Transcribing" and
-  opens the chat box. Within a moment the text is typed and sent, and the box
-  closes.
+Install helper dependencies and `lupa`, then run:
 
-The message goes to whatever channel your chat box last used. Pin it with
-`/gps channel party` (or say, raid, guild, officer, instance) and go back to
-the sticky behavior with `/gps channel sticky`.
-
-Other commands: `/gps status`, `/gps test hello there` (exercises the send path
-without the helper), `/gps api` (lists which chat functions the client has),
-`/gps reset`.
-
-## Beta client bug: saved variables never load
-
-WoW Forever beta build 69913 (interface 16001) writes every addon's saved
-variables to disk but never reads them back, so all addon settings reset on
-every login and reload. This is a client bug, tracked by the community
-([forum thread](https://us.forums.blizzard.com/en/wow/t/savedvariables-never-load-in-the-beta-%E2%80%94-all-addon-settings-reset-on-login-69913/2354798),
-[bug report](https://github.com/ClassicWoWCommunity/forever-bugs/issues/34)).
-
-GamepadSpeak works around it the way [WickKeeper](https://github.com/Wicksmods/WickKeeper)
-does: it mirrors its settings into one account macro named `GPSpeak`, which is
-stored on Blizzard's server and survives. Don't edit or delete that macro. The
-WTF file is still written on every reload, which is what the helper reads.
-Macros can arrive a moment after the first login of a session; the addon
-restores as soon as they do and says so in chat.
-
-## How the pieces talk
-
-- Addon → helper: the addon writes `GamepadSpeakDB` to
-  `WTF/Account/<account>/SavedVariables/GamepadSpeak.lua`. WoW only flushes
-  that file on `/reload` or logout, so setup reloads for you. The helper polls
-  the file every two seconds and rebinds when it changes.
-- Controller: the helper uses SDL's game controller API, the same library WoW
-  Forever uses, so the `PAD*` names in the addon map one-to-one to SDL buttons
-  (PAD1 = A/Cross, PADSOCIAL = Create/View, PADBACK = touchpad click, and so
-  on). An unrecognized pad can still be used with `--raw-button N`.
-- Helper → game: after transcription the helper presses Enter (the game's own
-  Open Chat binding), types the text, presses Enter to send, then types
-  `/click InputFunctionBindingButton_PAD2 LeftButton 1` and Enter. That is
-  exactly what the gamepad Back button does: Blizzard routes Circle/B through
-  an override binding that clicks that named button, and `/click` is a secure
-  slash command. Every step is a real key press handled by Blizzard code.
-- Why it's done this way: in WoW Forever's gamepad style the chat box keeps
-  focus after a send, and any attempt by addon code to open or clear chat
-  focus runs into a protected gamepad call. That taint spreads into the
-  gamepad binding stack and can freeze the client. SecureHandler snippets
-  would be the textbook answer, but this beta client cannot compile them
-  (`loadstring_untainted` is missing, another known client bug). So the addon
-  never touches chat focus itself; it only computes the close command from
-  Blizzard's key constant and stores it for the helper.
-- Safety: the helper only types when a World of Warcraft window is in the
-  foreground (where the platform lets it check). Otherwise it logs the
-  transcript and plays an error beep.
-
-## Helper options
-
-```
---language bg          speech language (default: auto-detect)
---model small          Whisper model: tiny, base, small, medium, large-v3 (default: base)
---device cuda          run Whisper on an NVIDIA GPU (default: auto)
---button PADSOCIAL     override the trigger from the addon
---raw-button 4         raw joystick button index for unmapped pads
---input-device NAME    pick a specific microphone
---open-key ENTER       key that opens chat before typing: ENTER (default), a binding, or none
---close-command CMD    slash command typed after sending (default auto = from the addon; none to skip)
---close-key none       extra key pressed after sending, e.g. ESCAPE (default none)
---silent               no beeps
---max-seconds 60       auto-stop a forgotten recording
---any-app              type even if WoW is not in the foreground (testing)
---wow-dir PATH         the _classic_beta_ folder if not in the default place
---check                print status and exit
+```powershell
+python -m unittest discover -s tests -v
 ```
 
-`base` is a good default for English on any recent CPU. For Bulgarian or other
-languages, `small` with `--language bg` is noticeably more accurate.
-
-## Things to verify in the first live test
-
-These depend on WoW Forever behavior that can't be confirmed outside the game:
-
-1. The addon sees the trigger press while the game's own gamepad UI is active
-   (it relies on `OnGamePadButtonDown` with input propagation on).
-2. The helper still receives controller input while WoW holds the pad. SDL is
-   started with background events allowed; if nothing arrives, the pad is being
-   opened exclusively and `--raw-button` over the joystick API is the fallback.
-3. Synthetic key events reach the chat box and don't flip the UI out of gamepad
-   style (`InputDeviceInterfaceStyle`). If they do, try `--open-key none` with
-   `/gps open on` so only the text and Enter are injected.
-
-## Layout
-
-```
-addon/GamepadSpeak/          GamepadSpeak.toc, GamepadSpeak.lua, Bindings.xml
-helper/gamepadspeak_helper.py  controller, mic, Whisper, keystrokes, settings watcher
-helper/pyproject.toml        dependencies (pygame-ce, sounddevice, faster-whisper, pynput)
-install.sh / install.ps1     put the addon in WoW + prepare the helper env
-run-helper.sh / run-helper.ps1  run the helper in the foreground with logs
-```
+Tests cover key repeats, short controller holds, modifier release order, focus restrictions, error recovery, settings selection/persistence, and the addon recording/release indicator using a stubbed WoW API. They do not replace an in-game integration test.

@@ -1,0 +1,27 @@
+name: Build Windows helper
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, wow-hold-to-talk]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install ./helper pyinstaller lupa
+      - run: python -m unittest discover -s tests -v
+      - name: Package console helper
+        working-directory: helper
+        run: python -m PyInstaller --noconfirm --onedir --name GamepadSpeak --collect-all faster_whisper --collect-all ctranslate2 --collect-all tokenizers --collect-all sounddevice --hidden-import pygame._sdl2.controller --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 gamepadspeak_helper.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GamepadSpeak-Windows
+          path: |
+            helper/dist/GamepadSpeak/
+            addon/GamepadSpeak/
+            README.md

@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: GamepadSpeak
-## Notes: Push a controller button, talk, push again: your words land in chat. Pairs with the GamepadSpeak macOS helper.
+## Notes: Hold a configurable key or controller button, speak, release to send. Requires the external helper.
 ## Author: kubeden
-## Version: 0.1.0
+## Version: 0.2.0
 ## SavedVariables: GamepadSpeakDB
 ## IconTexture: Interface\Icons\Ability_Warrior_BattleShout
 
