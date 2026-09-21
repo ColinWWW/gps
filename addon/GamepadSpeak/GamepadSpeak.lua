@@ -23,6 +23,7 @@ local function msg(text) print(PREFIX .. text) end
 
 -- Human names for a DualSense; other pads map the same PAD* codes.
 local BUTTON_NAMES = {
+	BUTTON4 = "Mouse4", BUTTON5 = "Mouse5",
 	PAD1 = "Cross", PAD2 = "Circle", PAD3 = "Square", PAD4 = "Triangle",
 	PAD5 = "Mute", PAD6 = "Button 6",
 	PADSOCIAL = "Create", PADFORWARD = "Options", PADSYSTEM = "PS", PADBACK = "Touchpad",
@@ -343,7 +344,19 @@ local function OnTriggerReleased()
 	end
 end
 
+-- Poll side buttons without intercepting world clicks or changing game bindings.
+-- The helper independently observes the same physical press/release on Windows.
+observer:SetScript("OnUpdate", function()
+	if capturing or not DB or not IsMouseButtonDown then return end
+	local button = ({ BUTTON4 = "Button4", BUTTON5 = "Button5" })[DB.trigger]
+	if not button then return end
+	local down = IsMouseButtonDown(button)
+	if down and not triggerHeld then OnTriggerPressed()
+	elseif not down and triggerHeld then OnTriggerReleased() end
+end)
+
 local function FinishCapture(button)
+	if InCombatLockdown() then msg("Change your trigger after combat."); return end
 	capturing = false
 	ApplyObserverMode()
 
@@ -468,6 +481,20 @@ changePad:SetSize(210, 28)
 changePad:SetPoint("TOPLEFT", 20, -225)
 changePad:SetText("Change controller button")
 changePad:SetScript("OnClick", function() StartCapture("gamepad") end)
+local function SelectMouse(button)
+	captureType = "mouse"
+	FinishCapture(button)
+end
+local mouse4 = CreateFrame("Button", "GamepadSpeakSelectMouse4", settingsPanel, "UIPanelButtonTemplate")
+mouse4:SetSize(210, 28)
+mouse4:SetPoint("TOPLEFT", 20, -265)
+mouse4:SetText("Use Mouse4 (side button)")
+mouse4:SetScript("OnClick", function() SelectMouse("BUTTON4") end)
+local mouse5 = CreateFrame("Button", "GamepadSpeakSelectMouse5", settingsPanel, "UIPanelButtonTemplate")
+mouse5:SetSize(210, 28)
+mouse5:SetPoint("TOPLEFT", 20, -305)
+mouse5:SetText("Use Mouse5 (side button)")
+mouse5:SetScript("OnClick", function() SelectMouse("BUTTON5") end)
 local category
 if Settings and Settings.RegisterCanvasLayoutCategory then
 	category = Settings.RegisterCanvasLayoutCategory(settingsPanel, "GamepadSpeak")
@@ -530,6 +557,10 @@ local function SlashHandler(input)
 
 	if cmd == "setup" then
 		StartCapture("keyboard")
+	elseif cmd == "mouse4" then
+		SelectMouse("BUTTON4")
+	elseif cmd == "mouse5" then
+		SelectMouse("BUTTON5")
 	elseif cmd == "gamepad" then
 		StartCapture("gamepad")
 	elseif cmd == "settings" or cmd == "" then
@@ -577,6 +608,7 @@ local function SlashHandler(input)
 		msg("  /gps settings - open the in-game settings panel")
 		msg("  /gps setup   - pick the keyboard trigger key")
 		msg("  /gps gamepad - pick the controller trigger button")
+		msg("  /gps mouse4 or /gps mouse5 - use a mouse side button")
 		msg("  /gps status  - show current settings")
 		msg("  /gps test [text] - send text through the same path the helper uses")
 		msg("  /gps channel <say|party|raid|guild|officer|instance|sticky>")

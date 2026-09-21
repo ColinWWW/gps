@@ -2,7 +2,7 @@
 ## Title: GamepadSpeak
 ## Notes: Hold a configurable key or controller button, speak, release to send. Requires the external helper.
 ## Author: kubeden
-## Version: 0.2.0
+## Version: 0.2.1
 ## SavedVariables: GamepadSpeakDB
 ## IconTexture: Interface\Icons\Ability_Warrior_BattleShout
 

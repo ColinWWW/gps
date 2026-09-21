@@ -34,6 +34,7 @@ import pygame  # noqa: E402
 import sounddevice as sd  # noqa: E402
 from pygame._sdl2 import controller as sdl_controller  # noqa: E402
 from pynput.keyboard import Controller as KeyboardController, Key, Listener  # noqa: E402
+from pynput.mouse import Listener as MouseListener  # noqa: E402
 
 SAMPLE_RATE = 16_000
 DEFAULT_CLOSE_COMMAND = "/click InputFunctionBindingButton_PAD2 LeftButton 1"
@@ -421,6 +422,41 @@ class KeyboardWatcher:
             self.listener.stop()
 
 
+class MouseWatcher:
+    """Map Windows side buttons to WoW BUTTON4/BUTTON5 without suppressing clicks."""
+    def __init__(self, on_press, on_release):
+        self.on_press, self.on_release = on_press, on_release
+        self.events = queue.SimpleQueue()
+        self.trigger = None
+        self.active = False
+        self.listener = None
+
+    def set_trigger(self, trigger):
+        self.trigger = trigger
+        self.active = False
+        while not self.events.empty():
+            self.events.get()
+
+    def start(self):
+        self.listener = MouseListener(on_click=lambda x, y, button, pressed:
+                                     self.events.put((button, pressed)))
+        self.listener.start()
+
+    def pump(self):
+        while not self.events.empty():
+            button, pressed = self.events.get()
+            name = {"x1": "BUTTON4", "x2": "BUTTON5"}.get(getattr(button, "name", None))
+            if name is not None and name == self.trigger and pressed != self.active:
+                self.active = pressed
+                (self.on_press if pressed else self.on_release)()
+        if self.listener is not None and not self.listener.is_alive():
+            raise RuntimeError("Mouse listener stopped; restart the helper")
+
+    def stop(self):
+        if self.listener:
+            self.listener.stop()
+
+
 class Injector:
     def __init__(self, char_delay: float = 0.002):
         self.kb = KeyboardController()
@@ -531,18 +567,18 @@ def wow_is_frontmost() -> bool | None:
 # Sounds (short generated tones, no platform audio APIs needed)
 # ---------------------------------------------------------------------------
 
-def tone(freq: float, seconds: float = 0.08, volume: float = 0.2) -> np.ndarray:
+def tone(freq: float, seconds: float = 0.12, volume: float = 0.055) -> np.ndarray:
     t = np.linspace(0, seconds, int(44_100 * seconds), endpoint=False)
-    env = np.minimum(1.0, np.minimum(t / 0.01, (seconds - t) / 0.02))
+    env = np.sin(np.linspace(0, np.pi, t.size)) ** 2
     return (volume * env * np.sin(2 * np.pi * freq * t)).astype("float32")
 
 
 class Sounds:
     def __init__(self, enabled: bool):
         self.enabled = enabled
-        self.start_tone = tone(880)
-        self.stop_tone = np.concatenate([tone(660), tone(440)])
-        self.error_tone = tone(220, 0.2)
+        self.start_tone = tone(520)
+        self.stop_tone = tone(390)
+        self.error_tone = tone(330, 0.18, 0.045)
 
     def play(self, which: np.ndarray) -> None:
         if not self.enabled:
@@ -565,6 +601,7 @@ class Coordinator:
         self.saved = SavedVariables(Path(args.wow_dir))
         self.watcher = ControllerWatcher(self.on_trigger, self.on_release)
         self.keyboard = KeyboardWatcher(self.on_trigger, self.on_release)
+        self.mouse = MouseWatcher(self.on_trigger, self.on_release)
         self.trigger_type = "keyboard"
         self.target = None
         self.cancelled = threading.Event()
@@ -580,7 +617,7 @@ class Coordinator:
 
     def close_command(self) -> str | None:
         choice = self.args.close_command
-        if choice.lower() == "auto" and self.trigger_type == "keyboard":
+        if choice.lower() == "auto" and self.trigger_type in ("keyboard", "mouse"):
             return None
         if choice.lower() == "none":
             return None
@@ -592,9 +629,10 @@ class Coordinator:
     def apply_settings(self) -> None:
         trigger = self.args.button or self.saved.settings.trigger or "F8"
         self.trigger_type = ("gamepad" if self.args.raw_button is not None or trigger.startswith("PAD")
-                             else "keyboard")
+                             else "mouse" if trigger in ("BUTTON4", "BUTTON5") else "keyboard")
         self.watcher.set_trigger(trigger if self.trigger_type == "gamepad" else None, self.args.raw_button)
         self.keyboard.set_trigger(trigger if self.trigger_type == "keyboard" else None)
+        self.mouse.set_trigger(trigger if self.trigger_type == "mouse" else None)
         # How the chat box gets opened before typing. Default is the game's own
         # Enter binding (OPENCHAT), which keeps addon code out of the chat path.
         choice = self.args.open_key
@@ -625,12 +663,15 @@ class Coordinator:
         self.apply_settings()
         self.watcher.start()
         self.keyboard.start()
+        if SYSTEM == "Windows":
+            self.mouse.start()
         log("Ready. Hold the trigger to record; release to transcribe and send.")
 
         last_poll = 0.0
         while True:
             self.watcher.pump()
             self.keyboard.pump()
+            self.mouse.pump()
             now = time.monotonic()
             if now - last_poll > 2.0:
                 last_poll = now
@@ -672,6 +713,7 @@ class Coordinator:
     def close(self):
         self.cancel_recording()
         self.keyboard.stop()
+        self.mouse.stop()
         pygame.quit()
 
     def begin_recording(self) -> None:
@@ -725,7 +767,7 @@ class Coordinator:
             # Never inject while the user still holds Ctrl/Alt/Shift or the
             # trigger (including after the recording duration cap).
             deadline = time.monotonic() + 5
-            while self.keyboard.active or self.watcher._held or any(
+            while self.keyboard.active or self.mouse.active or self.watcher._held or any(
                 self.keyboard.name(k) in {"CTRL", "SHIFT", "ALT", "META"}
                 for k in tuple(self.keyboard.down)
             ):

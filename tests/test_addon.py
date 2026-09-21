@@ -37,6 +37,7 @@ class AddonTests(unittest.TestCase):
         function SaveBindings() end
         function GetCurrentBindingSet() return 1 end
         function ReloadUI() reloads=reloads+1 end
+        function IsMouseButtonDown(button) return mouseDown == button end
         function IsControlKeyDown() return ctrl or false end
         function IsShiftKeyDown() return false end
         function IsAltKeyDown() return false end
@@ -68,6 +69,19 @@ class AddonTests(unittest.TestCase):
         SlashCmdList.GAMEPADSPEAK('setup')
         GamepadSpeakObserver.scripts.OnKeyDown(nil, 'ESCAPE')
         assert(reloads == 1)
+        GamepadSpeakSelectMouse4.scripts.OnClick()
+        assert(GamepadSpeakDB.trigger == 'BUTTON4')
+        assert(GamepadSpeakDB.triggerType == 'mouse')
+        assert(reloads == 2)
+        mouseDown = 'Button4'
+        GamepadSpeakObserver.scripts.OnUpdate()
+        assert(GamepadSpeakIndicator.text.textValue:find('Recording'))
+        mouseDown = nil
+        GamepadSpeakObserver.scripts.OnUpdate()
+        assert(GamepadSpeakIndicator.text.textValue:find('Transcribing'))
+        GamepadSpeakSelectMouse5.scripts.OnClick()
+        assert(GamepadSpeakDB.trigger == 'BUTTON5')
+        assert(reloads == 3)
         ''')
 
 if __name__ == '__main__': unittest.main()

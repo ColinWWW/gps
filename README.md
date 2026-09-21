@@ -15,9 +15,11 @@ This is still a WoW addon **plus an external helper**. WoW addons cannot capture
 5. Run `run-helper.ps1`. On first launch it downloads the selected Whisper model; wait for **Ready** before speaking.
 6. With WoW focused, hold your trigger while speaking, then release. The helper opens chat, types the result and sends it with Enter.
 
-Supported keyboard keys: F1–F20, A–Z, 0–9, Insert/Delete, Home/End, Page Up/Down, and arrow keys, with optional Ctrl/Shift/Alt. Use an unused key: existing game actions are not unbound. Mouse buttons are not implemented. Release modifiers too before delivery.
+Supported keyboard keys: F1–F20, A–Z, 0–9, Insert/Delete, Home/End, Page Up/Down, and arrow keys, with optional Ctrl/Shift/Alt. Use an unused key: existing game actions are not unbound. On Windows, select **Use Mouse4** or **Use Mouse5** in `/gps settings` (or run `/gps mouse4` / `/gps mouse5`). These are the physical back/forward side buttons; mouse software must not remap them to keyboard keys. Selecting one saves and reloads the UI. Existing mouse bindings still fire. Release modifiers too before delivery.
 
 For a controller, click **Change controller button**, or use `/gps gamepad`. Controller buttons and trigger axes now also use hold/release instead of toggle. The original gamepad chat-closing workaround remains enabled for controller triggers; keyboard triggers use normal Enter-to-send.
+
+Recording cues are now quieter, lower-pitched single tones with smooth fades. Use `--silent` to disable them entirely.
 
 ## Options and troubleshooting
 

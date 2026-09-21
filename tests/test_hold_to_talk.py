@@ -16,6 +16,29 @@ class Key:
         self.name = name
 
 class HoldTests(unittest.TestCase):
+    def test_mouse_side_buttons_repeat_release_and_rebind(self):
+        press, release = Mock(), Mock()
+        w = gps.MouseWatcher(press, release)
+        w.set_trigger('BUTTON4')
+        for name, down in [('left', True), ('x2', True), ('x1', True), ('x1', True), ('x1', False)]:
+            w.events.put((SimpleNamespace(name=name), down))
+        w.pump()
+        press.assert_called_once()
+        release.assert_called_once()
+        w.set_trigger('BUTTON5')
+        for name, down in [('x1', True), ('x2', True), ('x2', False)]:
+            w.events.put((SimpleNamespace(name=name), down))
+        w.pump()
+        self.assertEqual(press.call_count, 2)
+        self.assertEqual(release.call_count, 2)
+
+    def test_softer_sounds_have_smooth_edges_and_low_peak(self):
+        sounds = gps.Sounds(True)
+        for sound in (sounds.start_tone, sounds.stop_tone, sounds.error_tone):
+            self.assertLessEqual(float(gps.np.max(gps.np.abs(sound))), 0.056)
+            self.assertAlmostEqual(float(sound[0]), 0, places=6)
+            self.assertAlmostEqual(float(sound[-1]), 0, places=6)
+
     def test_repeat_and_release(self):
         press, release = Mock(), Mock()
         w = gps.KeyboardWatcher(press, release)
@@ -68,6 +91,7 @@ class HoldTests(unittest.TestCase):
         c.recorder = Mock()
         c.sounds = Mock()
         c.keyboard = SimpleNamespace(active=False, down=set())
+        c.mouse = SimpleNamespace(active=False)
         c.watcher = SimpleNamespace(_held=set())
         c.target = 42
         c.trigger_type = 'keyboard'
