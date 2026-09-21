@@ -373,6 +373,7 @@ class KeyboardWatcher:
         self.down = set()
         self.active = False
         self.binding = set()
+        self.delivery_guard = None
         self.listener = None
 
     @staticmethod
@@ -394,10 +395,20 @@ class KeyboardWatcher:
         self.down.clear()
         self.active = False
 
+    def filter_delivery_keys(self, msg, data):
+        # Keep injected transcript events and physical key-up events flowing.
+        # Blocking only physical key-down/repeat avoids stuck movement keys.
+        guard = self.delivery_guard
+        if (guard is not None and msg in (0x0100, 0x0104)
+                and not (data.flags & 0x12) and guard()):
+            self.listener.suppress_event()
+        return True
+
     def start(self):
         self.listener = Listener(
             on_press=lambda k: self.events.put((k, True)),
             on_release=lambda k: self.events.put((k, False)),
+            win32_event_filter=self.filter_delivery_keys,
         )
         self.listener.start()
 
@@ -779,7 +790,11 @@ class Coordinator:
             def delivery_allowed():
                 return not self.cancelled.is_set() and (self.args.any_app or (
                     wow_is_frontmost() is True and foreground_identity() == self.target))
-            self.injector.deliver(text, self.hotkey, self.close_key, self.close_command(), delivery_allowed)
+            self.keyboard.delivery_guard = delivery_allowed
+            try:
+                self.injector.deliver(text, self.hotkey, self.close_key, self.close_command(), delivery_allowed)
+            finally:
+                self.keyboard.delivery_guard = None
             log("Delivery finished")
         except Exception as e:
             log(f"Could not deliver transcript: {e}")

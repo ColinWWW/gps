@@ -140,6 +140,37 @@ class HoldTests(unittest.TestCase):
         self.assertEqual(c.state, c.IDLE)
         self.assertIsNone(c.close_command())
 
+    def test_delivery_filters_physical_keydowns_only(self):
+        w = gps.KeyboardWatcher(Mock(), Mock())
+        w.listener = Mock()
+        w.delivery_guard = lambda: True
+        w.filter_delivery_keys(0x0100, SimpleNamespace(flags=0))
+        w.listener.suppress_event.assert_called_once()
+        w.listener.reset_mock()
+        # Injected transcript keys and physical releases must pass through.
+        w.filter_delivery_keys(0x0100, SimpleNamespace(flags=0x10))
+        w.filter_delivery_keys(0x0101, SimpleNamespace(flags=0))
+        w.delivery_guard = lambda: False
+        w.filter_delivery_keys(0x0100, SimpleNamespace(flags=0))
+        w.delivery_guard = None
+        w.filter_delivery_keys(0x0100, SimpleNamespace(flags=0))
+        w.listener.suppress_event.assert_not_called()
+
+    def test_movement_can_remain_held_during_delivery(self):
+        c = self.coordinator()
+        c.keyboard.name = gps.KeyboardWatcher.name
+        c.keyboard.down.add(Key('w'))
+        c.transcriber.transcribe.return_value = 'hello'
+        def deliver(*args):
+            self.assertTrue(c.keyboard.delivery_guard())
+            raise RuntimeError('delivery error')
+        c.injector.deliver.side_effect = deliver
+        with patch.object(gps, 'wow_is_frontmost', return_value=True), patch.object(gps, 'foreground_identity', return_value=42):
+            c._finish(None)
+        c.injector.deliver.assert_called_once()
+        self.assertIsNone(c.keyboard.delivery_guard)
+        self.assertEqual(c.state, c.IDLE)
+
     def test_failed_transcription_recovers(self):
         c = self.coordinator()
         c.state = c.FINALIZING

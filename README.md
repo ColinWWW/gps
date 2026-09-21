@@ -54,3 +54,5 @@ python -m unittest discover -s tests -v
 ```
 
 Tests cover key repeats, short controller holds, modifier release order, focus restrictions, error recovery, settings selection/persistence, and the addon recording/release indicator using a stubbed WoW API. They do not replace an in-game integration test.
+
+On Windows, keep holding movement keys while recording and sending. During transcript delivery, physical keyboard presses/repeats are briefly suppressed while WoW remains focused so they cannot enter chat. Key releases still pass through. Opening chat may briefly interrupt movement; resume or re-press a movement key afterward if needed. Modifiers and the talk trigger must still be released before sending.
