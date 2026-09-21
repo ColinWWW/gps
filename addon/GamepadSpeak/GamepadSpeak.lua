@@ -2,8 +2,8 @@
 --
 -- Flow (with the helper running):
 --   press trigger  -> helper starts recording, this addon shows "Recording"
---   release trigger -> helper stops + transcribes, this addon opens the chat box
---   helper types the text and presses Enter -> message sent, box closed
+--   release trigger -> helper stops + transcribes and sends a checked key packet
+--   addon sends through the chat API without focusing the chat box
 --
 -- The addon is the source of truth for settings. They live in GamepadSpeakDB
 -- (WTF/Account/<acct>/SavedVariables/GamepadSpeak.lua); the helper reads that
@@ -357,6 +357,9 @@ end)
 
 local function FinishCapture(button)
 	if InCombatLockdown() then msg("Change your trigger after combat."); return end
+	if ({F9=true,F10=true,F11=true,F12=true})[button:match("([^%-]+)$")] then
+		msg("F9-F12 are reserved for direct delivery. Choose another key."); return
+	end
 	capturing = false
 	ApplyObserverMode()
 
@@ -541,6 +544,7 @@ local function ShowStatus()
 	local index = GetMacroIndexByName(MACRO_NAME)
 	msg("Settings macro '" .. MACRO_NAME .. "': " .. ((index and index > 0) and "present" or "|cffff5050missing|r (beta client does not load SavedVariables; the macro is the backup)"))
 	msg("Trigger: " .. (DB.trigger and ButtonLabel(DB.trigger) or "|cffff5050not set|r (run /gps setup)"))
+	msg("Direct delivery: " .. (DB.directProtocol == "1" and "ready" or "unavailable; check startup messages"))
 	msg("Helper hotkey: " .. (DB.hotkey or "|cffff5050none|r"))
 	msg("Channel: " .. (DB.chatType or "last used (sticky)"))
 	msg("Close command: " .. ComputeCloseCommand() .. " (PAD2 is bound to '" .. tostring(GetBindingAction("PAD2")) .. "')")
@@ -632,6 +636,7 @@ events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("PLAYER_ENTERING_WORLD")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+events:RegisterEvent("ADDON_ACTION_BLOCKED")
 events:RegisterEvent("UPDATE_MACROS")
 
 local function Init()
@@ -641,6 +646,7 @@ local function Init()
 	ApplyObserverMode()
 	db.closeCommand = db.trigger:match("^PAD") and ComputeCloseCommand() or "none"
 	EnsureHotkey()
+	GamepadSpeakTransport.Install(db, msg, function() SetState("idle") end)
 	local editBox = GetEditBox()
 	if editBox then HookEditBox(editBox) end
 	if db.trigger then
@@ -662,6 +668,9 @@ events:SetScript("OnEvent", function(self, event, arg1, arg2)
 		end
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		ApplyObserverMode()
+		if DB and DB.directProtocol ~= "1" then
+			GamepadSpeakTransport.Install(DB, msg, function() SetState("idle") end)
+		end
 		if macroDirty then SaveToMacro() end
 	elseif event == "UPDATE_MACROS" then
 		-- Macros can arrive from the server after the first login of a session.
@@ -674,7 +683,7 @@ events:SetScript("OnEvent", function(self, event, arg1, arg2)
 			msg("Settings restored from macro. Trigger: " .. ButtonLabel(DB.trigger) .. ".")
 		end
 		if DB and not DB.trigger then DB.trigger = "F8"; DB.triggerType = "keyboard" end
-	elseif event == "ADDON_ACTION_FORBIDDEN" and arg1 == ADDON_NAME then
+	elseif (event == "ADDON_ACTION_FORBIDDEN" or event == "ADDON_ACTION_BLOCKED") and arg1 == ADDON_NAME then
 		if tostring(arg2):find("Reload") then
 			msg("The client refused the automatic reload. Type |cffffd100/reload|r to save the trigger for the helper.")
 		else

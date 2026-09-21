@@ -84,7 +84,7 @@ class HoldTests(unittest.TestCase):
 
     def coordinator(self):
         c = gps.Coordinator.__new__(gps.Coordinator)
-        c.args = SimpleNamespace(any_app=False, close_command='auto')
+        c.args = SimpleNamespace(any_app=False, close_command='auto', delivery='chat')
         c.state = c.IDLE
         c._lock = threading.Lock()
         c.cancelled = threading.Event()

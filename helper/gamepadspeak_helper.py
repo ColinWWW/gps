@@ -2,8 +2,8 @@
 """GamepadSpeak helper for WoW Forever. Cross-platform (macOS, Windows, Linux).
 
 Hold the trigger key/button: record the mic.
-Release: stop, transcribe locally with Whisper, then open the WoW chat box,
-type the text and press Enter. The game only ever sees ordinary key presses.
+Release: stop, transcribe locally with Whisper, then pass a checked packet to
+the addon using reserved function keys. Direct delivery never opens chat.
 
 Settings (trigger button, hotkey) come from the addon's SavedVariables file,
 written by `/gps setup` in game. Everything runs locally; no audio leaves the PC.
@@ -69,6 +69,7 @@ class AddonSettings:
     hotkey: str | None = None
     trigger_type: str | None = None
     close_command: str | None = None
+    direct_protocol: str | None = None
 
 
 class SavedVariables:
@@ -100,7 +101,8 @@ class SavedVariables:
         self._mtime = mtime
         text = p.read_text(encoding="utf-8", errors="replace")
         new = AddonSettings(trigger=self._value("trigger", text), trigger_type=self._value("triggerType", text), hotkey=self._value("hotkey", text),
-                            close_command=self._value("closeCommand", text))
+                            close_command=self._value("closeCommand", text),
+                            direct_protocol=self._value("directProtocol", text))
         changed = new != self.settings
         self.settings = new
         return changed
@@ -468,6 +470,21 @@ class MouseWatcher:
             self.listener.stop()
 
 
+def direct_packet(text: str) -> bytes:
+    """Versioned, length-checked UTF-8 message; never interpret slash commands."""
+    text = " ".join(text.split())
+    payload = text.encode("utf-8")
+    if not payload or len(payload) > 255:
+        raise ValueError("Direct messages must contain 1-255 UTF-8 bytes; try a shorter sentence")
+    if any(b < 32 or b == 127 for b in payload):
+        raise ValueError("Invalid control character in transcript")
+    body = b"GP\x01" + bytes([len(payload)]) + payload
+    checksum = 0
+    for b in body:
+        checksum = (checksum * 33 + b) % 65521
+    return body + checksum.to_bytes(2, "big")
+
+
 class Injector:
     def __init__(self, char_delay: float = 0.002):
         self.kb = KeyboardController()
@@ -495,6 +512,23 @@ class Injector:
     def _enter(self) -> None:
         self.kb.press(Key.enter)
         self.kb.release(Key.enter)
+
+    def deliver_direct(self, text: str, allowed=lambda: True) -> None:
+        packet = direct_packet(text)
+        def tap(key):
+            if not allowed():
+                raise RuntimeError("Direct delivery cancelled: WoW lost focus")
+            self.kb.press(key)
+            try:
+                time.sleep(0.002)
+            finally:
+                self.kb.release(key)
+            time.sleep(0.002)
+        tap(Key.f11)
+        for byte in packet:
+            for shift in range(7, -1, -1):
+                tap(Key.f10 if (byte >> shift) & 1 else Key.f9)
+        tap(Key.f12)
 
     def deliver(self, text: str, open_key: Hotkey | None, close_key: Hotkey | None,
                 close_command: str | None, allowed=lambda: True) -> None:
@@ -672,6 +706,13 @@ class Coordinator:
             log(f"Addon settings file not found under {self.saved.wow_dir / 'WTF'}. "
                 "Using F8 by default. Install the addon and use /gps settings to change it.")
         self.apply_settings()
+        if self.args.delivery == "direct":
+            if self.saved.settings.direct_protocol != "1":
+                raise RuntimeError("Direct delivery needs the updated addon: reinstall it, enter WoW, "
+                                   "check /gps status, then /reload and restart the helper")
+            if (self.args.button or self.saved.settings.trigger or "F8").split("-")[-1] in {"F9", "F10", "F11", "F12"}:
+                raise RuntimeError("F9-F12 are reserved for direct delivery; choose another talk trigger")
+            log("Direct delivery: chat stays closed; F9-F12 reserved. No movement keys are suppressed.")
         self.watcher.start()
         self.keyboard.start()
         if SYSTEM == "Windows":
@@ -776,13 +817,16 @@ class Coordinator:
                 log(f"WoW is not the frontmost app ({frontmost_app_name()}); not typing")
                 self.sounds.play(self.sounds.error_tone)
                 return
-            # Never inject while the user still holds Ctrl/Alt/Shift or the
-            # trigger (including after the recording duration cap).
+            direct = self.args.delivery == "direct"
+            if direct and self.saved.settings.direct_protocol != "1":
+                raise RuntimeError("Addon direct delivery unavailable; check /gps status and /reload")
+            # Direct transport has modifier variants and leaves movement alone.
+            # Legacy text injection must wait for modifiers to be released.
             deadline = time.monotonic() + 5
-            while self.keyboard.active or self.mouse.active or self.watcher._held or any(
+            while self.keyboard.active or self.mouse.active or self.watcher._held or (not direct and any(
                 self.keyboard.name(k) in {"CTRL", "SHIFT", "ALT", "META"}
                 for k in tuple(self.keyboard.down)
-            ):
+            )):
                 if self.cancelled.is_set() or time.monotonic() > deadline:
                     log("Not typing while trigger/modifiers remain held")
                     return
@@ -790,12 +834,16 @@ class Coordinator:
             def delivery_allowed():
                 return not self.cancelled.is_set() and (self.args.any_app or (
                     wow_is_frontmost() is True and foreground_identity() == self.target))
-            self.keyboard.delivery_guard = delivery_allowed
-            try:
-                self.injector.deliver(text, self.hotkey, self.close_key, self.close_command(), delivery_allowed)
-            finally:
-                self.keyboard.delivery_guard = None
-            log("Delivery finished")
+            if direct:
+                self.injector.deliver_direct(text, delivery_allowed)
+                log("Packet delivered to addon (check WoW chat for send confirmation)")
+            else:
+                self.keyboard.delivery_guard = delivery_allowed
+                try:
+                    self.injector.deliver(text, self.hotkey, self.close_key, self.close_command(), delivery_allowed)
+                finally:
+                    self.keyboard.delivery_guard = None
+                log("Delivery finished")
         except Exception as e:
             log(f"Could not deliver transcript: {e}")
             self.sounds.play(self.sounds.error_tone)
@@ -844,6 +892,8 @@ def main() -> None:
     ap.add_argument("--device", default="cpu", help="Whisper device: auto, cpu, cuda (default: cpu; no CUDA libraries required)")
     ap.add_argument("--compute-type", default="int8", help="Whisper compute type (default: int8)")
     ap.add_argument("--input-device", help="Mic device name or index for sounddevice")
+    ap.add_argument("--delivery", choices=("direct", "chat"), default="direct",
+                    help="direct (default): addon sends without opening chat; chat: legacy text injection")
     ap.add_argument("--close-command", default="auto",
                     help="Slash command typed after sending to leave the chat box. 'auto' (default) uses the one "
                          "the addon computed (the gamepad Back button's click target), 'none' skips it, "

@@ -47,6 +47,7 @@ class AddonTests(unittest.TestCase):
           OpenToCategory=function(id) opened=id end
         }
         ''')
+        lua.execute(Path('addon/GamepadSpeak/Transport.lua').read_text())
         lua.execute(Path('addon/GamepadSpeak/GamepadSpeak.lua').read_text())
         lua.execute('''
         frames[#frames].scripts.OnEvent(nil, 'PLAYER_ENTERING_WORLD')
@@ -61,10 +62,10 @@ class AddonTests(unittest.TestCase):
         assert(GamepadSpeakIndicator.text.textValue:find('Transcribing'))
         SlashCmdList.GAMEPADSPEAK('setup')
         ctrl = true
-        GamepadSpeakObserver.scripts.OnKeyDown(nil, 'F9')
-        assert(GamepadSpeakDB.trigger == 'CTRL-F9')
+        GamepadSpeakObserver.scripts.OnKeyDown(nil, 'F6')
+        assert(GamepadSpeakDB.trigger == 'CTRL-F6')
         assert(GamepadSpeakDB.triggerType == 'keyboard')
-        assert(macros.body:find('trigger=CTRL%-F9'))
+        assert(macros.body:find('trigger=CTRL%-F6'))
         assert(reloads == 1)
         SlashCmdList.GAMEPADSPEAK('setup')
         GamepadSpeakObserver.scripts.OnKeyDown(nil, 'ESCAPE')
