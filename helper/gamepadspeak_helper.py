@@ -70,6 +70,8 @@ class AddonSettings:
     trigger_type: str | None = None
     close_command: str | None = None
     direct_protocol: str | None = None
+    routes: tuple[tuple[str, int], ...] = ()
+    general_channel: str | None = None
 
 
 class SavedVariables:
@@ -100,9 +102,15 @@ class SavedVariables:
             return False
         self._mtime = mtime
         text = p.read_text(encoding="utf-8", errors="replace")
-        new = AddonSettings(trigger=self._value("trigger", text), trigger_type=self._value("triggerType", text), hotkey=self._value("hotkey", text),
-                            close_command=self._value("closeCommand", text),
-                            direct_protocol=self._value("directProtocol", text))
+        new = AddonSettings(
+            trigger=self._value("trigger", text),
+            trigger_type=self._value("triggerType", text),
+            hotkey=self._value("hotkey", text),
+            close_command=self._value("closeCommand", text),
+            direct_protocol=self._value("directProtocol", text),
+            routes=self._routes(text),
+            general_channel=self._value("generalChannel", text),
+        )
         changed = new != self.settings
         self.settings = new
         return changed
@@ -111,6 +119,24 @@ class SavedVariables:
     def _value(key: str, text: str) -> str | None:
         m = re.search(r'\["%s"\]\s*=\s*"([^"]*)"' % key, text)
         return m.group(1) if m and m.group(1) else None
+
+    @staticmethod
+    def _routes(text: str) -> tuple[tuple[str, int], ...]:
+        block = re.search(r'\["routes"\]\s*=\s*\{([^}]*)\}', text)
+        if block:
+            pairs = re.findall(r'\["([^"]+)"\]\s*=\s*(\d+)', block.group(1))
+            return tuple((k, int(v)) for k, v in pairs)
+        raw = SavedVariables._value("routes", text)
+        if not raw:
+            return ()
+        out = []
+        for part in raw.split(","):
+            if ":" not in part:
+                continue
+            binding, route = part.split(":", 1)
+            if route.isdigit():
+                out.append((binding.strip(), int(route)))
+        return tuple(out)
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +401,8 @@ class KeyboardWatcher:
         self.down = set()
         self.active = False
         self.binding = set()
+        self.routes: dict[str, int] = {}
+        self.active_route = 0
         self.delivery_guard = None
         self.listener = None
 
@@ -396,6 +424,7 @@ class KeyboardWatcher:
         self.binding = set(binding.upper().split("-")) if binding else set()
         self.down.clear()
         self.active = False
+        self.active_route = 0
 
     def filter_delivery_keys(self, msg, data):
         # Keep injected transcript events and physical key-up events flowing.
@@ -414,6 +443,19 @@ class KeyboardWatcher:
         )
         self.listener.start()
 
+    def _match_route(self, names: set[str]) -> int | None:
+        best = None
+        best_size = -1
+        for binding, route in self.routes.items():
+            parts = set(binding.upper().split("-"))
+            if parts <= names and len(parts) > best_size:
+                best, best_size = route, len(parts)
+        if best is not None:
+            return best
+        if self.binding and self.binding <= names:
+            return 0
+        return None
+
     def pump(self):
         while not self.events.empty():
             key, pressed = self.events.get()
@@ -423,10 +465,15 @@ class KeyboardWatcher:
             else:
                 self.down.discard(key)
             names = {self.name(k) for k in self.down}
-            active = bool(self.binding) and self.binding <= names
-            if active != self.active:
-                self.active = active
-                (self.on_press if active else self.on_release)()
+            route = self._match_route(names)
+            active = route is not None
+            if active and not self.active:
+                self.active = True
+                self.active_route = route or 0
+                self.on_press(self.active_route)
+            elif not active and self.active:
+                self.active = False
+                self.on_release()
         if self.listener is not None and not self.listener.is_alive():
             raise RuntimeError("Keyboard listener stopped; restart the helper")
 
@@ -441,12 +488,18 @@ class MouseWatcher:
         self.on_press, self.on_release = on_press, on_release
         self.events = queue.SimpleQueue()
         self.trigger = None
+        self.routes: dict[str, int] = {}
+        self.modifiers = lambda: set()
         self.active = False
+        self.active_button = None
+        self.active_route = 0
         self.listener = None
 
     def set_trigger(self, trigger):
         self.trigger = trigger
         self.active = False
+        self.active_button = None
+        self.active_route = 0
         while not self.events.empty():
             self.events.get()
 
@@ -455,13 +508,36 @@ class MouseWatcher:
                                      self.events.put((button, pressed)))
         self.listener.start()
 
+    def _binding(self, button_name: str) -> str:
+        mods = self.modifiers()
+        prefix = ""
+        for name in ("CTRL", "SHIFT", "ALT"):
+            if name in mods:
+                prefix += name + "-"
+        return prefix + button_name
+
     def pump(self):
         while not self.events.empty():
             button, pressed = self.events.get()
             name = {"x1": "BUTTON4", "x2": "BUTTON5"}.get(getattr(button, "name", None))
-            if name is not None and name == self.trigger and pressed != self.active:
-                self.active = pressed
-                (self.on_press if pressed else self.on_release)()
+            if name is None:
+                continue
+            if pressed and not self.active:
+                binding = self._binding(name)
+                if binding in self.routes:
+                    route = self.routes[binding]
+                elif name == self.trigger:
+                    route = 0
+                else:
+                    continue
+                self.active = True
+                self.active_button = name
+                self.active_route = route
+                self.on_press(route)
+            elif not pressed and self.active and name == self.active_button:
+                self.active = False
+                self.active_button = None
+                self.on_release()
         if self.listener is not None and not self.listener.is_alive():
             raise RuntimeError("Mouse listener stopped; restart the helper")
 
@@ -470,25 +546,32 @@ class MouseWatcher:
             self.listener.stop()
 
 
-def direct_packet(text: str) -> bytes:
-    """Versioned, length-checked UTF-8 message; never interpret slash commands."""
+def direct_packet(text: str, route: int = 0) -> bytes:
+    """Versioned, length-checked UTF-8 message with optional chat route."""
     text = " ".join(text.split())
     payload = text.encode("utf-8")
     if not payload or len(payload) > 255:
         raise ValueError("Direct messages must contain 1-255 UTF-8 bytes; try a shorter sentence")
     if any(b < 32 or b == 127 for b in payload):
         raise ValueError("Invalid control character in transcript")
-    body = b"GP\x01" + bytes([len(payload)]) + payload
+    if not 0 <= route <= 255:
+        raise ValueError("Invalid chat route")
+    body = b"GP\x02" + bytes([len(payload), route]) + payload
     checksum = 0
     for b in body:
         checksum = (checksum * 33 + b) % 65521
     return body + checksum.to_bytes(2, "big")
 
 
+# 2-bit symbols: four reserved keys, all modifier variants map to the same symbol in-game.
+DIRECT_SYMBOL_KEYS = (Key.f9, Key.f10, Key.f13, Key.f14)
+
+
 class Injector:
-    def __init__(self, char_delay: float = 0.002):
+    def __init__(self, char_delay: float = 0.002, packet_delay: float = 0.001):
         self.kb = KeyboardController()
         self.char_delay = char_delay
+        self.packet_delay = packet_delay
 
     def press_hotkey(self, hk: Hotkey) -> None:
         for m in hk.modifiers:
@@ -513,21 +596,21 @@ class Injector:
         self.kb.press(Key.enter)
         self.kb.release(Key.enter)
 
-    def deliver_direct(self, text: str, allowed=lambda: True) -> None:
-        packet = direct_packet(text)
+    def deliver_direct(self, text: str, route: int = 0, allowed=lambda: True) -> None:
+        """Send a checked packet via 2-bit key symbols (4 taps/byte, one short pause each)."""
+        packet = direct_packet(text, route)
         def tap(key):
             if not allowed():
                 raise RuntimeError("Direct delivery cancelled: WoW lost focus")
             self.kb.press(key)
-            try:
-                time.sleep(0.002)
-            finally:
-                self.kb.release(key)
-            time.sleep(0.002)
+            self.kb.release(key)
         tap(Key.f11)
         for byte in packet:
-            for shift in range(7, -1, -1):
-                tap(Key.f10 if (byte >> shift) & 1 else Key.f9)
+            for shift in (6, 4, 2, 0):
+                tap(DIRECT_SYMBOL_KEYS[(byte >> shift) & 3])
+                # One pause per 2-bit symbol (~4× fewer events than bit-banging,
+                # and no second sleep while the key is held down).
+                time.sleep(self.packet_delay)
         tap(Key.f12)
 
     def deliver(self, text: str, open_key: Hotkey | None, close_key: Hotkey | None,
@@ -647,11 +730,13 @@ class Coordinator:
         self.watcher = ControllerWatcher(self.on_trigger, self.on_release)
         self.keyboard = KeyboardWatcher(self.on_trigger, self.on_release)
         self.mouse = MouseWatcher(self.on_trigger, self.on_release)
+        self.mouse.modifiers = self.physical_modifiers
         self.trigger_type = "keyboard"
         self.target = None
+        self.chat_route = 0
         self.cancelled = threading.Event()
         self.recorder = Recorder(device=args.input_device)
-        self.injector = Injector()
+        self.injector = Injector(packet_delay=args.packet_delay)
         self.sounds = Sounds(not args.silent)
         self.transcriber: Transcriber | None = None
         self.hotkey: Hotkey | None = None
@@ -659,6 +744,13 @@ class Coordinator:
         self.state = self.IDLE
         self.record_start = 0.0
         self._lock = threading.Lock()
+
+    def physical_modifiers(self) -> set[str]:
+        if SYSTEM == "Windows":
+            get = ctypes.windll.user32.GetAsyncKeyState  # type: ignore[attr-defined]
+            return {name for name, vk in (("CTRL", 0x11), ("SHIFT", 0x10), ("ALT", 0x12))
+                    if get(vk) & 0x8000}
+        return {self.keyboard.name(k) for k in tuple(self.keyboard.down)} & {"CTRL", "SHIFT", "ALT"}
 
     def close_command(self) -> str | None:
         choice = self.args.close_command
@@ -673,11 +765,18 @@ class Coordinator:
 
     def apply_settings(self) -> None:
         trigger = self.args.button or self.saved.settings.trigger or "F8"
+        routes = dict(self.saved.settings.routes) if self.args.delivery == "direct" and not self.args.button else {}
         self.trigger_type = ("gamepad" if self.args.raw_button is not None or trigger.startswith("PAD")
-                             else "mouse" if trigger in ("BUTTON4", "BUTTON5") else "keyboard")
+                             else "mouse" if trigger in ("BUTTON4", "BUTTON5") or any(
+                                 b.endswith(("BUTTON4", "BUTTON5")) for b in routes)
+                             else "keyboard")
         self.watcher.set_trigger(trigger if self.trigger_type == "gamepad" else None, self.args.raw_button)
         self.keyboard.set_trigger(trigger if self.trigger_type == "keyboard" else None)
+        self.keyboard.routes = {k: v for k, v in routes.items()
+                                if not k.endswith(("BUTTON4", "BUTTON5"))}
         self.mouse.set_trigger(trigger if self.trigger_type == "mouse" else None)
+        self.mouse.routes = {k: v for k, v in routes.items()
+                             if k.endswith(("BUTTON4", "BUTTON5"))}
         # How the chat box gets opened before typing. Default is the game's own
         # Enter binding (OPENCHAT), which keeps addon code out of the chat path.
         choice = self.args.open_key
@@ -696,7 +795,9 @@ class Coordinator:
         self.close_key = None if self.args.close_key.lower() == "none" else Hotkey.parse(self.args.close_key)
         if self.close_key is None and self.args.close_key.lower() != "none":
             log(f"Can't parse --close-key '{self.args.close_key}'; not closing chat")
-        log(f"Settings: trigger={trigger or 'none'} open-chat={choice} close-command={self.close_command() or 'none'}")
+        route_summary = ", ".join(f"{k}→{v}" for k, v in sorted(routes.items())) or "none"
+        log(f"Settings: trigger={trigger or 'none'} open-chat={choice} "
+            f"close-command={self.close_command() or 'none'} routes={route_summary}")
 
 
     def run(self) -> None:
@@ -707,12 +808,15 @@ class Coordinator:
                 "Using F8 by default. Install the addon and use /gps settings to change it.")
         self.apply_settings()
         if self.args.delivery == "direct":
-            if self.saved.settings.direct_protocol != "1":
+            if self.saved.settings.direct_protocol != "2":
                 raise RuntimeError("Direct delivery needs the updated addon: reinstall it, enter WoW, "
                                    "check /gps status, then /reload and restart the helper")
-            if (self.args.button or self.saved.settings.trigger or "F8").split("-")[-1] in {"F9", "F10", "F11", "F12"}:
-                raise RuntimeError("F9-F12 are reserved for direct delivery; choose another talk trigger")
-            log("Direct delivery: chat stays closed; F9-F12 reserved. No movement keys are suppressed.")
+            reserved = {"F9", "F10", "F11", "F12", "F13", "F14"}
+            trigger_key = (self.args.button or self.saved.settings.trigger or "F8").split("-")[-1]
+            if trigger_key in reserved:
+                raise RuntimeError("F9-F14 are reserved for direct delivery; choose another talk trigger")
+            log(f"Direct delivery: 2-bit transport (~{self.args.packet_delay * 1000:.1f}ms/symbol). "
+                "Chat stays closed; F9/F10/F13/F14 + F11/F12 reserved.")
         self.watcher.start()
         self.keyboard.start()
         if SYSTEM == "Windows":
@@ -739,13 +843,14 @@ class Coordinator:
                 self.end_recording()
             time.sleep(0.01)
 
-    def on_trigger(self) -> None:
+    def on_trigger(self, route: int = 0) -> None:
         with self._lock:
             if self.state == self.IDLE:
                 if not self.args.any_app and wow_is_frontmost() is not True:
                     log(f"Trigger ignored: WoW is not detected in foreground ({frontmost_app_name() or 'unknown'})")
                     return
                 self.target = foreground_identity()
+                self.chat_route = route
                 self.cancelled.clear()
                 self.begin_recording()
 
@@ -818,9 +923,10 @@ class Coordinator:
                 self.sounds.play(self.sounds.error_tone)
                 return
             direct = self.args.delivery == "direct"
-            if direct and self.saved.settings.direct_protocol != "1":
+            if direct and self.saved.settings.direct_protocol != "2":
                 raise RuntimeError("Addon direct delivery unavailable; check /gps status and /reload")
-            # Direct transport has modifier variants and leaves movement alone.
+            # Direct transport uses reserved keys whose modifier variants map to
+            # the same symbols, so held Shift/Ctrl during a route press is fine.
             # Legacy text injection must wait for modifiers to be released.
             deadline = time.monotonic() + 5
             while self.keyboard.active or self.mouse.active or self.watcher._held or (not direct and any(
@@ -835,7 +941,7 @@ class Coordinator:
                 return not self.cancelled.is_set() and (self.args.any_app or (
                     wow_is_frontmost() is True and foreground_identity() == self.target))
             if direct:
-                self.injector.deliver_direct(text, delivery_allowed)
+                self.injector.deliver_direct(text, self.chat_route, delivery_allowed)
                 log("Packet delivered to addon (check WoW chat for send confirmation)")
             else:
                 self.keyboard.delivery_guard = delivery_allowed
@@ -894,6 +1000,9 @@ def main() -> None:
     ap.add_argument("--input-device", help="Mic device name or index for sounddevice")
     ap.add_argument("--delivery", choices=("direct", "chat"), default="direct",
                     help="direct (default): addon sends without opening chat; chat: legacy text injection")
+    ap.add_argument("--packet-delay", type=float, default=0.001,
+                    help="Pause after each 2-bit transport symbol in direct mode (default: 0.001s). "
+                         "Raise slightly if messages fail checksum; lower for more speed.")
     ap.add_argument("--close-command", default="auto",
                     help="Slash command typed after sending to leave the chat box. 'auto' (default) uses the one "
                          "the addon computed (the gamepad Back button's click target), 'none' skips it, "
@@ -918,6 +1027,8 @@ def main() -> None:
 
     if args.max_seconds <= 0:
         ap.error("--max-seconds must be positive")
+    if args.packet_delay < 0:
+        ap.error("--packet-delay must be non-negative")
 
     if args.check:
         run_check(args)

@@ -39,8 +39,14 @@ class AddonTests(unittest.TestCase):
         function ReloadUI() reloads=reloads+1 end
         function IsMouseButtonDown(button) return mouseDown == button end
         function IsControlKeyDown() return ctrl or false end
-        function IsShiftKeyDown() return false end
+        function IsShiftKeyDown() return shift or false end
         function IsAltKeyDown() return false end
+        function wipe(t) for k in pairs(t) do t[k]=nil end end
+        function ClearOverrideBindings() bindings={} end
+        function SetOverrideBinding(owner, priority, key, action)
+          bindings = bindings or {}
+          bindings[key]=action
+        end
         Settings = {
           RegisterCanvasLayoutCategory=function() return {GetID=function() return 7 end} end,
           RegisterAddOnCategory=function() end,
@@ -52,6 +58,7 @@ class AddonTests(unittest.TestCase):
         lua.execute('''
         frames[#frames].scripts.OnEvent(nil, 'PLAYER_ENTERING_WORLD')
         assert(GamepadSpeakDB.trigger == 'F8')
+        assert(GamepadSpeakDB.directProtocol == '2')
         SlashCmdList.GAMEPADSPEAK('settings')
         assert(opened == 7)
         GamepadSpeakObserver.scripts.OnKeyDown(nil, 'F8')
@@ -83,6 +90,11 @@ class AddonTests(unittest.TestCase):
         GamepadSpeakSelectMouse5.scripts.OnClick()
         assert(GamepadSpeakDB.trigger == 'BUTTON5')
         assert(reloads == 3)
+        GamepadSpeakMouseRoutes.scripts.OnClick()
+        assert(GamepadSpeakDB.routes.BUTTON4 == 1)
+        assert(GamepadSpeakDB.routes['SHIFT-BUTTON4'] == 2)
+        assert(GamepadSpeakDB.routes.BUTTON5 == 3)
+        assert(reloads == 4)
         ''')
 
 if __name__ == '__main__': unittest.main()

@@ -23,7 +23,7 @@ class HoldTests(unittest.TestCase):
         for name, down in [('left', True), ('x2', True), ('x1', True), ('x1', True), ('x1', False)]:
             w.events.put((SimpleNamespace(name=name), down))
         w.pump()
-        press.assert_called_once()
+        press.assert_called_once_with(0)
         release.assert_called_once()
         w.set_trigger('BUTTON5')
         for name, down in [('x1', True), ('x2', True), ('x2', False)]:
@@ -31,6 +31,19 @@ class HoldTests(unittest.TestCase):
         w.pump()
         self.assertEqual(press.call_count, 2)
         self.assertEqual(release.call_count, 2)
+
+    def test_mouse_routes_capture_shift_at_press(self):
+        press, release = Mock(), Mock()
+        w = gps.MouseWatcher(press, release)
+        w.routes = {'BUTTON4': 1, 'SHIFT-BUTTON4': 2, 'BUTTON5': 3}
+        w.modifiers = lambda: {'SHIFT'}
+        w.events.put((SimpleNamespace(name='x1'), True))
+        w.pump()
+        press.assert_called_once_with(2)
+        w.modifiers = lambda: set()
+        w.events.put((SimpleNamespace(name='x1'), False))
+        w.pump()
+        release.assert_called_once()
 
     def test_softer_sounds_have_smooth_edges_and_low_peak(self):
         sounds = gps.Sounds(True)
@@ -47,7 +60,7 @@ class HoldTests(unittest.TestCase):
         for down in (True, True, True, False):
             w.events.put((k, down))
         w.pump()
-        press.assert_called_once()
+        press.assert_called_once_with(0)
         release.assert_called_once()
 
     def test_combo_releases_when_modifier_released_first(self):
@@ -58,7 +71,7 @@ class HoldTests(unittest.TestCase):
         for k, down in ((ctrl, True), (key, True), (ctrl, False), (key, False)):
             w.events.put((k, down))
         w.pump()
-        press.assert_called_once()
+        press.assert_called_once_with(0)
         release.assert_called_once()
 
     def test_two_physical_modifiers(self):
@@ -94,6 +107,7 @@ class HoldTests(unittest.TestCase):
         c.mouse = SimpleNamespace(active=False)
         c.watcher = SimpleNamespace(_held=set())
         c.target = 42
+        c.chat_route = 0
         c.trigger_type = 'keyboard'
         c.transcriber = Mock()
         c.injector = Mock()
