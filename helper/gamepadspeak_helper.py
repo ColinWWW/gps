@@ -67,14 +67,58 @@ def default_wow_dir() -> Path:
     if SYSTEM == "Darwin":
         return Path("/Applications/World of Warcraft/_classic_beta_")
     if SYSTEM == "Windows":
+        candidates = []
         for base in (os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
                      os.environ.get("ProgramFiles", r"C:\Program Files")):
-            p = Path(base) / "World of Warcraft" / "_classic_beta_"
-            if p.exists():
+            candidates.append(Path(base) / "World of Warcraft" / "_classic_beta_")
+        # Custom installs often live on other drives; still fall back to the usual path.
+        candidates.append(Path(r"C:\Program Files (x86)\World of Warcraft\_classic_beta_"))
+        for p in candidates:
+            if p.is_dir() and addons_dir_writable(p):
                 return p
-        return Path(r"C:\Program Files (x86)\World of Warcraft\_classic_beta_")
+        for p in candidates:
+            if p.is_dir():
+                return p
+        return candidates[-1]
     # Linux: Wine/Lutris/Steam prefixes vary; the user passes --wow-dir.
     return Path.home() / "Games" / "world-of-warcraft" / "drive_c" / "Program Files (x86)" / "World of Warcraft" / "_classic_beta_"
+
+
+def addons_dir_writable(wow_dir: Path) -> bool:
+    addons = wow_dir / "Interface" / "AddOns"
+    try:
+        addons.mkdir(parents=True, exist_ok=True)
+        probe = addons / f".gps-write-test-{os.getpid()}"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def normalize_wow_dir(path: Path) -> Path:
+    """Accept either the flavor folder or the parent 'World of Warcraft' directory."""
+    path = Path(os.path.expandvars(str(path))).expanduser()
+    if (path / "Interface" / "AddOns").is_dir() or (path / "WTF").is_dir():
+        return path
+    for sub in ("_classic_beta_", "_classic_", "_retail_"):
+        child = path / sub
+        if (child / "Interface").is_dir() or (child / "WTF").is_dir():
+            return child
+    return path
+
+
+def sync_error_hint(wow_dir: Path, err: BaseException) -> str:
+    msg = str(err).lower()
+    if isinstance(err, PermissionError) or "access is denied" in msg or "winerror 5" in msg:
+        return (
+            f"Cannot write to {wow_dir / 'Interface' / 'AddOns'}. "
+            "WoW is probably not installed under Program Files on this PC. "
+            f"Edit {CONFIG_NAME} next to Start.cmd and set wow_dir to your real folder, e.g.\n"
+            "  wow_dir = D:\\MYFAVORITEMONSTERGAME\\World of Warcraft\\_classic_beta_\n"
+            "Or run once: Start.cmd --wow-dir \"D:\\...\\World of Warcraft\\_classic_beta_\""
+        )
+    return f"Cannot write AddOns folder ({wow_dir / 'Interface' / 'AddOns'}): {err}"
 
 
 def config_path() -> Path:
@@ -107,15 +151,24 @@ def write_config_template(wow_dir: Path) -> None:
     path = config_path()
     if path.exists():
         return
-    path.write_text(
-        "# Optional settings. Edit this file in Notepad — no PowerShell required.\n"
-        "[gamepadspeak]\n"
-        f"wow_dir = {wow_dir}\n"
-        "# model = tiny.en\n"
-        "# silent = false\n",
-        encoding="utf-8",
-    )
-    log(f"Wrote {path.name} (edit wow_dir here if WoW is not in the default location)")
+    if SYSTEM == "Windows" and wow_dir.is_dir() and not addons_dir_writable(wow_dir):
+        body = (
+            "# Required on this PC: WoW is not writable under Program Files.\n"
+            "# Set wow_dir to your install (the _classic_beta_ folder, or parent World of Warcraft).\n"
+            "[gamepadspeak]\n"
+            "# wow_dir = D:\\MYFAVORITEMONSTERGAME\\World of Warcraft\\_classic_beta_\n"
+            "# model = tiny.en\n"
+        )
+    else:
+        body = (
+            "# Optional settings. Edit this file in Notepad — no PowerShell required.\n"
+            "[gamepadspeak]\n"
+            f"wow_dir = {wow_dir}\n"
+            "# model = tiny.en\n"
+            "# silent = false\n"
+        )
+    path.write_text(body, encoding="utf-8")
+    log(f"Wrote {path.name} — set wow_dir if WoW is not in the default location")
 
 
 def addon_signature(folder: Path) -> dict[str, str]:
@@ -141,7 +194,7 @@ def sync_addon(wow_dir: Path, source: Path | None = None) -> str:
     try:
         addons.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        raise RuntimeError(f"Cannot write AddOns folder ({addons}): {e}") from e
+        raise RuntimeError(sync_error_hint(wow_dir, e)) from e
     src_sig = addon_signature(source)
     if target.is_dir() and addon_signature(target) == src_sig:
         return "ok"
@@ -154,21 +207,21 @@ def sync_addon(wow_dir: Path, source: Path | None = None) -> str:
         if target.exists():
             shutil.rmtree(target)
         staging.rename(target)
-    except OSError:
+    except OSError as err:
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
-        raise
+        raise RuntimeError(sync_error_hint(wow_dir, err)) from err
     return action
 
 
 def resolve_wow_dir(cli_value: str | None, config: dict[str, str]) -> Path:
     if cli_value:
-        return Path(cli_value)
+        return normalize_wow_dir(Path(cli_value))
     if config.get("wow_dir"):
-        return Path(os.path.expandvars(config["wow_dir"]))
+        return normalize_wow_dir(Path(config["wow_dir"]))
     if os.environ.get("WOW_DIR"):
-        return Path(os.environ["WOW_DIR"])
-    return default_wow_dir()
+        return normalize_wow_dir(Path(os.environ["WOW_DIR"]))
+    return normalize_wow_dir(default_wow_dir())
 
 
 @dataclass(frozen=True)
@@ -1111,7 +1164,8 @@ def apply_startup(args) -> None:
         result = sync_addon(wow)
     except Exception as e:
         log(f"Addon sync failed: {e}")
-        log("Fix wow_dir in GamepadSpeak.ini (or pass --wow-dir), then restart.")
+        if CONFIG_NAME not in str(e):
+            log(f"Set wow_dir in {CONFIG_NAME} (next to Start.cmd) or pass --wow-dir, then restart.")
         return
     if result == "missing":
         log("No bundled addon folder found next to the helper; skipping sync.")

@@ -2,6 +2,8 @@
 # If WoW is not under Program Files, set wow_dir to your _classic_beta_ folder.
 
 [gamepadspeak]
-# wow_dir = C:\Program Files (x86)\World of Warcraft\_classic_beta_
+# wow_dir = D:\Games\World of Warcraft\_classic_beta_
+# Or the parent folder — the helper will find _classic_beta_ automatically:
+# wow_dir = D:\MYFAVORITEMONSTERGAME\World of Warcraft
 # model = tiny.en
 # silent = false
