@@ -4,7 +4,7 @@ Based on [kubeden/gps](https://github.com/kubeden/gps). This version adds an **i
 
 **Hold F8 → yap → release F8 → local Whisper transcription → WoW chat.**
 
-The default model is `tiny.en`, with English selected automatically, running on the CPU with `int8` compute. No NVIDIA CUDA libraries are required. Use `--model base.en` for the larger English model. GPU users with the required CUDA libraries installed can opt in with `--device cuda`.
+The default model is `base.en`, with English selected automatically, running on the CPU with `int8` compute. No NVIDIA CUDA libraries are required. For faster recognition, try `--model tiny.en` (or `model = tiny.en` in WoWYap.ini); it may be less accurate. An explicit `model` setting in an existing INI file takes precedence over the default. GPU users with the required CUDA libraries installed can opt in with `--device cuda`.
 
 This is still a WoW addon **plus an external helper**. WoW addons cannot capture the microphone or run Whisper themselves. The helper must remain running. This source targets the original WoW Forever client (Interface 16001); other Retail/Classic versions have not been validated.
 
@@ -61,7 +61,7 @@ Recording cues are now quieter, lower-pitched single tones with smooth fades. Us
 
 Recording starts only when WoW is detected in the foreground. Leaving WoW cancels the recording or pending delivery. Failure to identify the foreground window also prevents recording. Recordings are capped at 60 seconds by default. If the talk trigger remains held for five seconds after transcription, delivery is discarded. In legacy chat mode, held modifiers also delay delivery. Empty speech, microphone and transcription failures return the helper to idle.
 
-The addon clears its indicator after a direct send attempt. The helper cannot receive an acknowledgment from WoW: “Packet delivered” confirms only that the keystrokes were emitted. Check game chat for the actual message or an addon error. The indicator may show “Transcribing” briefly after cancelled or empty speech. The original beta's settings-macro backup is preserved; do not edit the `WoWYap` macro.
+The addon hides its indicator when direct delivery begins; there is no Receiving banner or duplicate Sent message. The helper cannot receive an acknowledgment from WoW: “Packet delivered” confirms only that the keystrokes were emitted. Check game chat for the actual message or an addon error. The indicator may show “Transcribing” briefly after cancelled or empty speech. The original beta's settings-macro backup is preserved; do not edit the `WoWYap` macro.
 
 The helper records/transcribes locally. Model downloads need internet; audio is not uploaded. Transcripts appear in the helper console and are sent to WoW chat.
 
@@ -71,7 +71,7 @@ Whisper inference already runs through native CTranslate2, but delivery also con
 
 At the default 2.5 ms byte pause, a 100-byte message has **267.5 ms of deliberate pacing**, down from about **1,125.5 ms** including the old 1 ms per-key holds. These are scheduled delays, not measured end-to-end latency; OS scheduling, WoW, and transcription add time. The console now reports separate `transcription=...ms`, `delivery=...ms`, and total processing times.
 
-Keep `tiny.en` / CPU / int8 for the existing setup. If WoW reports incomplete packets with batched input, try `Start.cmd --key-hold 0.001 --packet-delay 0.004` to restore individually held keys. You can also put `key_hold = 0.001` and `packet_delay = 0.004` in WoWYap.ini. Default `key_hold = 0` is faster. Both modes use the same checked protocol and preserve chat routes. No live Windows/WoW speedup is claimed from mock tests.
+The default is `base.en` / CPU / int8. `tiny.en` is the faster option when you can accept potentially lower recognition accuracy. If WoW reports incomplete packets with batched input, try `Start.cmd --key-hold 0.001 --packet-delay 0.004` to restore individually held keys. You can also put `key_hold = 0.001` and `packet_delay = 0.004` in WoWYap.ini. Default `key_hold = 0` is faster. Both modes use the same checked protocol and preserve chat routes. No live Windows/WoW speedup is claimed from mock tests.
 
 ## Windows executable build
 

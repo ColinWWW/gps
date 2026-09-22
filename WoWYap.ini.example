@@ -3,7 +3,8 @@
 
 [wowyap]
 # wow_dir = D:\MYFAVORITEMONSTERGAME\World of Warcraft\_classic_beta_
-# model = tiny.en
+# model = base.en
+# For faster recognition with potentially lower accuracy, use model = tiny.en
 # silent = false
 
 # packet_delay = 0.0025

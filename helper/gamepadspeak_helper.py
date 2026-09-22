@@ -119,7 +119,8 @@ def write_config_template(wow_dir: Path) -> None:
         "# Optional settings. Edit this file in Notepad — no PowerShell required.\n"
         "[wowyap]\n"
         f"wow_dir = {wow_dir}\n"
-        "# model = tiny.en\n"
+        "# model = base.en\n"
+        "# tiny.en may be faster, but less accurate.\n"
         "# silent = false\n",
         encoding="utf-8",
     )
@@ -1335,8 +1336,8 @@ def main() -> None:
     ap.add_argument("--button", help="Override the in-game trigger, e.g. F8, CTRL-F9 or PADSOCIAL")
     ap.add_argument("--raw-button", type=int, help="Use a raw joystick button index instead of an SDL mapping")
     ap.add_argument("--language", help="Speech language code, e.g. en or bg (default: auto-detect)")
-    ap.add_argument("--model", default=config.get("model", "tiny.en"),
-                    help="Whisper model: tiny.en, base.en, tiny, base, small, medium, large-v3 (default: tiny.en)")
+    ap.add_argument("--model", default=config.get("model", "base.en"),
+                    help="Whisper model: tiny.en, base.en, tiny, base, small, medium, large-v3 (default: base.en)")
     ap.add_argument("--device", default="cpu", help="Whisper device: auto, cpu, cuda (default: cpu; no CUDA libraries required)")
     ap.add_argument("--compute-type", default="int8", help="Whisper compute type (default: int8)")
     ap.add_argument("--input-device", help="Mic device name or index for sounddevice")

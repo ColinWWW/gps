@@ -830,13 +830,7 @@ local function Init()
 	ApplyObserverMode()
 	db.closeCommand = db.trigger:match("^PAD") and ComputeCloseCommand() or "none"
 	EnsureHotkey()
-	WoWYapTransport.Install(db, msg, function(kind)
-		if kind == "receiving" then
-			SetState("receiving", 8, function() SetState("idle") end)
-		else
-			SetState("idle")
-		end
-	end)
+	WoWYapTransport.Install(db, msg, function() SetState("idle") end)
 	local editBox = GetEditBox()
 	if editBox then HookEditBox(editBox) end
 	if db.trigger then
@@ -859,13 +853,7 @@ events:SetScript("OnEvent", function(self, event, arg1, arg2)
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		ApplyObserverMode()
 		if DB and DB.directProtocol ~= "2" then
-			WoWYapTransport.Install(DB, msg, function(kind)
-				if kind == "receiving" then
-					SetState("receiving", 8, function() SetState("idle") end)
-				else
-					SetState("idle")
-				end
-			end)
+			WoWYapTransport.Install(DB, msg, function() SetState("idle") end)
 		end
 		if macroDirty then SaveToMacro() end
 	elseif event == "UPDATE_MACROS" then
