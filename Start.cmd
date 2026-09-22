@@ -1,23 +1,23 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-title GamepadSpeak
+title WoWYap
 
 set "QUIET=0"
 echo %*| findstr /I /C:"--check" /C:"--install-addon" >nul && set "QUIET=1"
 
 if "%QUIET%"=="0" (
   echo.
-  echo  GamepadSpeak
+  echo  WoWYap
   echo  ------------
-  echo  Syncs the WoW addon and starts hold-to-talk.
+  echo  Syncs the WoW addon and starts hold-to-yap.
   echo  Leave this window open while you play. Ctrl+C stops it.
   echo.
 )
 
 rem Packaged build (from GitHub Actions artifact)
-if exist "%~dp0GamepadSpeak.exe" (
-  "%~dp0GamepadSpeak.exe" %*
+if exist "%~dp0WoWYap.exe" (
+  "%~dp0WoWYap.exe" %*
   set "ERR=%ERRORLEVEL%"
   goto :done
 )
@@ -25,7 +25,7 @@ if exist "%~dp0GamepadSpeak.exe" (
 rem Source checkout — no PowerShell required
 set "HELPER=%~dp0helper"
 if not exist "%HELPER%\gamepadspeak_helper.py" (
-  echo Could not find GamepadSpeak.exe or helper\gamepadspeak_helper.py
+  echo Could not find WoWYap.exe or helper\gamepadspeak_helper.py
   echo Put Start.cmd next to the helper build, or run it from the repo root.
   set "ERR=1"
   goto :done
@@ -66,7 +66,7 @@ if "%QUIET%"=="1" exit /b %ERR%
 echo.
 if not "%ERR%"=="0" (
   echo Helper exited with an error ^(%ERR%^).
-  echo If WoW is not in the default folder, edit GamepadSpeak.ini next to this file.
+  echo If WoW is not in the default folder, edit WoWYap.ini next to this file.
   pause
   exit /b %ERR%
 )

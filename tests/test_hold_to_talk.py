@@ -50,13 +50,13 @@ class HoldTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             wow = Path(tmp) / 'wow'
             self.assertEqual(gps.sync_addon(wow), 'installed')
-            self.assertTrue((wow / 'Interface' / 'AddOns' / 'GamepadSpeak' / 'GamepadSpeak.toc').is_file())
+            self.assertTrue((wow / 'Interface' / 'AddOns' / 'WoWYap' / 'WoWYap.toc').is_file())
             self.assertEqual(gps.sync_addon(wow), 'ok')
-            dest = wow / 'Interface' / 'AddOns' / 'GamepadSpeak' / 'GamepadSpeak.toc'
+            dest = wow / 'Interface' / 'AddOns' / 'WoWYap' / 'WoWYap.toc'
             dest.write_text(dest.read_text(encoding='utf-8') + '\n## X-Test: 1\n', encoding='utf-8')
             self.assertEqual(gps.sync_addon(wow), 'updated')
-            cfg = Path(tmp) / 'GamepadSpeak.ini'
-            cfg.write_text('# comment\n[gamepadspeak]\nwow_dir = C:\\Games\\WoW\nmodel = base.en\n', encoding='utf-8')
+            cfg = Path(tmp) / 'WoWYap.ini'
+            cfg.write_text('# comment\n[wowyap]\nwow_dir = C:\\Games\\WoW\nmodel = base.en\n', encoding='utf-8')
             with patch.object(gps, 'config_path', return_value=cfg):
                 loaded = gps.load_user_config()
             self.assertEqual(loaded['wow_dir'], r'C:\Games\WoW')

@@ -9,4 +9,4 @@ else
   echo "uv not found; ./run-helper.sh will create a venv with pip on first run."
 fi
 echo "Next: ./run-helper.sh  (auto-installs/updates the addon into WoW, then starts)"
-echo "Set WOW_DIR if needed, or create GamepadSpeak.ini with wow_dir=..."
+echo "Set WOW_DIR if needed, or create WoWYap.ini with wow_dir=..."

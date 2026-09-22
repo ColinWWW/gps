@@ -1,24 +1,24 @@
--- GamepadSpeak: controller-triggered voice-to-chat for WoW Forever.
+-- WoWYap: hold-to-yap voice-to-chat for WoW Forever.
 --
 -- Flow (with the helper running):
---   press trigger  -> helper starts recording, this addon shows "Recording"
+--   press trigger  -> helper starts recording, this addon shows "Yapping"
 --   release trigger -> helper stops + transcribes and sends a checked key packet
 --   addon sends through the chat API without focusing the chat box
 --
--- The addon is the source of truth for settings. They live in GamepadSpeakDB
--- (WTF/Account/<acct>/SavedVariables/GamepadSpeak.lua); the helper reads that
+-- The addon is the source of truth for settings. They live in WoWYapDB
+-- (WTF/Account/<acct>/SavedVariables/WoWYap.lua); the helper reads that
 -- file. WoW only flushes it on /reload or logout, so setup reloads the UI.
 
 local ADDON_NAME = ...
 
-BINDING_HEADER_GAMEPADSPEAK_HEADER = "GamepadSpeak"
-BINDING_NAME_GAMEPADSPEAK_OPENCHAT = "Open chat for voice text (used by the helper)"
+BINDING_HEADER_WOWYAP_HEADER = "WoWYap"
+BINDING_NAME_WOWYAP_OPENCHAT = "Open chat for voice text (used by the helper)"
 
 local DEFAULT_HOTKEY = "CTRL-SHIFT-F12"
 local AWAIT_TIMEOUT = 8      -- seconds to wait for the helper's text before closing chat
 local RECORD_TIMEOUT = 60    -- seconds before a forgotten recording indicator clears itself
 
-local PREFIX = "|cff69ccf0GamepadSpeak|r: "
+local PREFIX = "|cff69ccf0WoWYap|r: "
 local function msg(text) print(PREFIX .. text) end
 
 -- Human names for a DualSense; other pads map the same PAD* codes.
@@ -58,8 +58,8 @@ local observer                -- gamepad button observer frame, created below
 -- file's contents are lost. Create it lazily, as late as possible.
 local function GetDB()
 	if not DB then
-		if type(GamepadSpeakDB) ~= "table" then GamepadSpeakDB = {} end
-		DB = GamepadSpeakDB
+		if type(WoWYapDB) ~= "table" then WoWYapDB = {} end
+		DB = WoWYapDB
 	end
 	return DB
 end
@@ -69,7 +69,7 @@ local captureType = "keyboard"
 local triggerHeld = false
 local stateTimer
 
-local indicator = CreateFrame("Frame", "GamepadSpeakIndicator", UIParent)
+local indicator = CreateFrame("Frame", "WoWYapIndicator", UIParent)
 indicator:SetSize(260, 30)
 indicator:SetPoint("TOP", UIParent, "TOP", 0, -90)
 indicator:SetFrameStrata("HIGH")
@@ -88,7 +88,7 @@ local function SetState(newState, timeout, onTimeout)
 	CancelStateTimer()
 	state = newState
 	if newState == "recording" then
-		indicator.text:SetText("|cffff3030\226\151\143|r  Recording")
+		indicator.text:SetText("|cffff3030\226\151\143|r  Yapping")
 		indicator:Show()
 	elseif newState == "awaiting" then
 		indicator.text:SetText("|cffffd100\226\128\166|r  Transcribing")
@@ -113,7 +113,7 @@ end
 -- server and do survive, so the settings are mirrored into one account macro.
 -- The WTF file is still written on /reload, which is what the helper reads.
 ------------------------------------------------------------------------
-local MACRO_NAME = "GPSpeak"
+local MACRO_NAME = "WoWYap"
 local MACRO_ICON = 134400 -- INV_Misc_QuestionMark
 local PERSISTED_KEYS = { "trigger", "triggerType", "chatType", "openOnPress", "routes", "generalChannel" }
 local ROUTE_NAMES = {
@@ -155,7 +155,7 @@ local function Serialize(db)
 			parts[#parts + 1] = key .. "=" .. tostring(v)
 		end
 	end
-	return "#GamepadSpeak settings. Do not edit or delete.\n" .. table.concat(parts, " ")
+	return "#WoWYap settings. Do not edit or delete.\n" .. table.concat(parts, " ")
 end
 
 local function Deserialize(body)
@@ -267,7 +267,7 @@ local function HookEditBox(editBox)
 end
 
 -- Called by the helper's hotkey (Bindings.xml) and by the second trigger press.
-function GamepadSpeak_OpenChat()
+function WoWYap_OpenChat()
 	local editBox = GetEditBox()
 	if not editBox then return end
 	HookEditBox(editBox)
@@ -348,7 +348,7 @@ end
 ------------------------------------------------------------------------
 -- Controller observation
 ------------------------------------------------------------------------
-observer = CreateFrame("Frame", "GamepadSpeakObserver", UIParent)
+observer = CreateFrame("Frame", "WoWYapObserver", UIParent)
 observer:SetSize(1, 1)
 observer:SetPoint("CENTER")
 observer:EnableKeyboard(true)
@@ -545,16 +545,16 @@ end
 ------------------------------------------------------------------------
 -- In-game settings, also available directly through /gps settings.
 ------------------------------------------------------------------------
-local settingsPanel = CreateFrame("Frame", "GamepadSpeakSettingsPanel", UIParent)
-settingsPanel.name = "GamepadSpeak"
+local settingsPanel = CreateFrame("Frame", "WoWYapSettingsPanel", UIParent)
+settingsPanel.name = "WoWYap"
 local title = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 title:SetPoint("TOPLEFT", 20, -20)
-title:SetText("GamepadSpeak — Hold to talk")
+title:SetText("WoWYap — Hold to yap")
 local description = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 description:SetPoint("TOPLEFT", 20, -55)
 description:SetWidth(480)
 description:SetJustifyH("LEFT")
-description:SetText("Hold your chosen key to record. Release to transcribe and send to WoW chat. The external helper must be running. Choosing a new key saves and reloads the UI. Pick an unused key; existing game bindings still fire.")
+description:SetText("Hold your chosen key to yap. Release to transcribe and send to WoW chat. The external helper must be running. Choosing a new key saves and reloads the UI. Pick an unused key; existing game bindings still fire.")
 local currentKey = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 currentKey:SetPoint("TOPLEFT", 20, -150)
 settingsPanel:SetScript("OnShow", function()
@@ -574,17 +574,17 @@ local function SelectMouse(button)
 	captureType = "mouse"
 	FinishCapture(button)
 end
-local mouse4 = CreateFrame("Button", "GamepadSpeakSelectMouse4", settingsPanel, "UIPanelButtonTemplate")
+local mouse4 = CreateFrame("Button", "WoWYapSelectMouse4", settingsPanel, "UIPanelButtonTemplate")
 mouse4:SetSize(210, 28)
 mouse4:SetPoint("TOPLEFT", 20, -265)
 mouse4:SetText("Use Mouse4 (side button)")
 mouse4:SetScript("OnClick", function() SelectMouse("BUTTON4") end)
-local mouse5 = CreateFrame("Button", "GamepadSpeakSelectMouse5", settingsPanel, "UIPanelButtonTemplate")
+local mouse5 = CreateFrame("Button", "WoWYapSelectMouse5", settingsPanel, "UIPanelButtonTemplate")
 mouse5:SetSize(210, 28)
 mouse5:SetPoint("TOPLEFT", 20, -305)
 mouse5:SetText("Use Mouse5 (side button)")
 mouse5:SetScript("OnClick", function() SelectMouse("BUTTON5") end)
-local routesBtn = CreateFrame("Button", "GamepadSpeakMouseRoutes", settingsPanel, "UIPanelButtonTemplate")
+local routesBtn = CreateFrame("Button", "WoWYapMouseRoutes", settingsPanel, "UIPanelButtonTemplate")
 routesBtn:SetSize(360, 28)
 routesBtn:SetPoint("TOPLEFT", 20, -345)
 routesBtn:SetText("Mouse4=Say, Shift+Mouse4=General, Mouse5=Guild")
@@ -604,7 +604,7 @@ routesHelp:SetJustifyH("LEFT")
 routesHelp:SetText("Chat routes are chosen when you press the button (Shift during Mouse4 selects General). Or use /gps route <binding> <channel>.")
 local category
 if Settings and Settings.RegisterCanvasLayoutCategory then
-	category = Settings.RegisterCanvasLayoutCategory(settingsPanel, "GamepadSpeak")
+	category = Settings.RegisterCanvasLayoutCategory(settingsPanel, "WoWYap")
 	Settings.RegisterAddOnCategory(category)
 elseif InterfaceOptions_AddCategory then
 	InterfaceOptions_AddCategory(settingsPanel)
@@ -622,12 +622,12 @@ end
 ------------------------------------------------------------------------
 local function EnsureHotkey()
 	local DB = GetDB()
-	local bound = GetBindingKey("GAMEPADSPEAK_OPENCHAT")
+	local bound = GetBindingKey("WOWYAP_OPENCHAT")
 	if not bound and not InCombatLockdown() then
 		local want = DB.hotkey or DEFAULT_HOTKEY
 		local existing = GetBindingAction(want)
 		if existing == nil or existing == "" then
-			if SetBinding(want, "GAMEPADSPEAK_OPENCHAT") then
+			if SetBinding(want, "WOWYAP_OPENCHAT") then
 				SaveBindings(GetCurrentBindingSet())
 				bound = want
 			end
@@ -687,8 +687,8 @@ local function SlashHandler(input)
 	elseif cmd == "status" then
 		ShowStatus()
 	elseif cmd == "test" then
-		local text = rest ~= "" and rest or "GamepadSpeak test message"
-		GamepadSpeak_OpenChat()
+		local text = rest ~= "" and rest or "WoWYap test message"
+		WoWYap_OpenChat()
 		local editBox = GetEditBox()
 		editBox:Insert(text)
 		RunScript(editBox, "OnEnterPressed")
@@ -757,7 +757,7 @@ local function SlashHandler(input)
 		msg("Close command: " .. ComputeCloseCommand() .. " (PAD2 is bound to '" .. tostring(GetBindingAction("PAD2")) .. "')")
 	msg("Legacy open setting (unused in hold mode): " .. (DB.openOnPress and "on" or "off"))
 	elseif cmd == "hotkey" then
-		DB.hotkey = GetBindingKey("GAMEPADSPEAK_OPENCHAT")
+		DB.hotkey = GetBindingKey("WOWYAP_OPENCHAT")
 		msg("Helper hotkey: " .. (DB.hotkey or "|cffff5050none|r") .. ". Type /reload so the helper reads it.")
 	elseif cmd == "api" then
 		DumpApi()
@@ -785,9 +785,10 @@ local function SlashHandler(input)
 	end
 end
 
-SLASH_GAMEPADSPEAK1 = "/gamepadspeak"
-SLASH_GAMEPADSPEAK2 = "/gps"
-SlashCmdList.GAMEPADSPEAK = SlashHandler
+SLASH_WOWYAP1 = "/wowyap"
+SLASH_WOWYAP2 = "/yap"
+SLASH_WOWYAP3 = "/gps"
+SlashCmdList.WOWYAP = SlashHandler
 
 ------------------------------------------------------------------------
 -- Lifecycle
@@ -808,7 +809,7 @@ local function Init()
 	ApplyObserverMode()
 	db.closeCommand = db.trigger:match("^PAD") and ComputeCloseCommand() or "none"
 	EnsureHotkey()
-	GamepadSpeakTransport.Install(db, msg, function(kind)
+	WoWYapTransport.Install(db, msg, function(kind)
 		if kind == "receiving" then
 			SetState("receiving", 8, function() SetState("idle") end)
 		else
@@ -818,7 +819,7 @@ local function Init()
 	local editBox = GetEditBox()
 	if editBox then HookEditBox(editBox) end
 	if db.trigger then
-		msg("Trigger: " .. ButtonLabel(db.trigger) .. ". Start the helper; hold to record, release to send. /gps opens settings.")
+		msg("Trigger: " .. ButtonLabel(db.trigger) .. ". Start the helper; hold to yap, release to send. /yap opens settings.")
 	else
 		msg("Type /gps settings to choose your hold-to-talk key.")
 	end
@@ -826,18 +827,18 @@ end
 
 events:SetScript("OnEvent", function(self, event, arg1, arg2)
 	if event == "ADDON_LOADED" then
-		if arg1 == ADDON_NAME then seen.addonLoaded = type(GamepadSpeakDB) == "table" end
+		if arg1 == ADDON_NAME then seen.addonLoaded = type(WoWYapDB) == "table" end
 	elseif event == "PLAYER_LOGIN" then
-		seen.login = type(GamepadSpeakDB) == "table"
+		seen.login = type(WoWYapDB) == "table"
 	elseif event == "PLAYER_ENTERING_WORLD" then
 		if seen.enteringWorld == nil then
-			seen.enteringWorld = type(GamepadSpeakDB) == "table"
+			seen.enteringWorld = type(WoWYapDB) == "table"
 			Init()
 		end
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		ApplyObserverMode()
 		if DB and DB.directProtocol ~= "2" then
-			GamepadSpeakTransport.Install(DB, msg, function(kind)
+			WoWYapTransport.Install(DB, msg, function(kind)
 				if kind == "receiving" then
 					SetState("receiving", 8, function() SetState("idle") end)
 				else

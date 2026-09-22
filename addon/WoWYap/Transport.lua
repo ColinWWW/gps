@@ -3,8 +3,8 @@
 -- from its key binding's hardware-event context.
 -- Protocol v2: GP + version + length + route + payload + checksum.
 -- No EditBox, movement calls, keyboard suppression, or secure snippets.
-GamepadSpeakTransport = {}
-local T = GamepadSpeakTransport
+WoWYapTransport = {}
+local T = WoWYapTransport
 local owner = CreateFrame("Frame")
 local packet, symbol, bits, started
 local db, report, complete
@@ -147,7 +147,7 @@ function T.Install(settings, printMessage, onComplete)
     for key in pairs(keys) do
         for _, prefix in ipairs(prefixes) do
             local action = GetBindingAction(prefix .. key)
-            if action and action ~= "" and action ~= "GAMEPADSPEAK_OPENCHAT" then
+            if action and action ~= "" and action ~= "WOWYAP_OPENCHAT" then
                 report("Direct delivery needs " .. prefix .. key .. " unbound (currently " .. action .. "). Then /reload.")
                 return false
             end
@@ -156,7 +156,7 @@ function T.Install(settings, printMessage, onComplete)
     local ok, err = pcall(function()
         for key, action in pairs(keys) do
             for _, prefix in ipairs(prefixes) do
-                SetOverrideBinding(owner, true, prefix .. key, "GAMEPADSPEAK_" .. action)
+                SetOverrideBinding(owner, true, prefix .. key, "WOWYAP_" .. action)
             end
         end
     end)

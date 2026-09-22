@@ -28,9 +28,9 @@ class TransportTests(TestCase):
             end
             function report(s) notices[#notices+1]=s end
         ''')
-        self.lua.execute(Path('addon/GamepadSpeak/Transport.lua').read_text())
-        self.lua.execute('GamepadSpeakTransport.Install(db, report, function() done=done+1 end)')
-        self.input = self.lua.globals().GamepadSpeakTransport.Input
+        self.lua.execute(Path('addon/WoWYap/Transport.lua').read_text())
+        self.lua.execute('WoWYapTransport.Install(db, report, function() done=done+1 end)')
+        self.input = self.lua.globals().WoWYapTransport.Input
 
     def transfer(self, data, final=True):
         self.input('start')
@@ -47,7 +47,7 @@ class TransportTests(TestCase):
         self.assertEqual(self.lua.eval('sent[1].text'), 'hello café 👋')
         self.assertEqual(self.lua.eval('sent[1].channel'), 'SAY')
         self.assertEqual(self.lua.eval('done'), 2)  # receiving + idle
-        self.assertEqual(self.lua.eval('bindings["CTRL-SHIFT-F9"]'), 'GAMEPADSPEAK_D0')
+        self.assertEqual(self.lua.eval('bindings["CTRL-SHIFT-F9"]'), 'WOWYAP_D0')
         self.assertEqual(self.lua.eval('db.directProtocol'), '2')
 
     def test_route_byte_selects_guild_and_general(self):
@@ -105,7 +105,7 @@ class TransportTests(TestCase):
         self.assertIn('Direct send blocked', self.lua.eval('notices[#notices]'))
 
     def test_binding_conflict_disables_transport(self):
-        self.lua.execute('conflict=true; GamepadSpeakTransport.Install(db, report, function() end)')
+        self.lua.execute('conflict=true; WoWYapTransport.Install(db, report, function() end)')
         self.assertIsNone(self.lua.eval('db.directProtocol'))
         self.transfer(gps.direct_packet('hello'))
         self.assertEqual(self.lua.eval('#sent'), 0)

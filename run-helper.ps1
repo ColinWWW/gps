@@ -1,8 +1,8 @@
 # Windows: run the helper (PowerShell). Prefer double-clicking Start.cmd.
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
-if (Test-Path ".\GamepadSpeak.exe") {
-  & ".\GamepadSpeak.exe" @args
+if (Test-Path ".\WoWYap.exe") {
+  & ".\WoWYap.exe" @args
   exit $LASTEXITCODE
 }
 Set-Location (Join-Path $PSScriptRoot "helper")

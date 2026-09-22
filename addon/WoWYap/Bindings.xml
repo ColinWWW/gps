@@ -1,0 +1,11 @@
+<Bindings>
+	<Binding name="WOWYAP_D0" hidden="true">WoWYapTransport.Input("0")</Binding>
+	<Binding name="WOWYAP_D1" hidden="true">WoWYapTransport.Input("1")</Binding>
+	<Binding name="WOWYAP_D2" hidden="true">WoWYapTransport.Input("2")</Binding>
+	<Binding name="WOWYAP_D3" hidden="true">WoWYapTransport.Input("3")</Binding>
+	<Binding name="WOWYAP_START" hidden="true">WoWYapTransport.Input("start")</Binding>
+	<Binding name="WOWYAP_SEND" hidden="true">WoWYapTransport.Input("send")</Binding>
+	<Binding name="WOWYAP_OPENCHAT" category="ADDONS" header="WOWYAP_HEADER">
+		WoWYap_OpenChat()
+	</Binding>
+</Bindings>
