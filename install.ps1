@@ -2,8 +2,8 @@
 # (Start.cmd syncs the addon automatically every launch).
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
-if (Test-Path ".\GamepadSpeak.exe") {
-  & ".\GamepadSpeak.exe" --install-addon @args
+if (Test-Path ".\WoWYap.exe") {
+  & ".\WoWYap.exe" --install-addon @args
   exit $LASTEXITCODE
 }
 & "$PSScriptRoot\run-helper.ps1" --install-addon @args

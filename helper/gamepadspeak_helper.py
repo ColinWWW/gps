@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""GamepadSpeak helper for WoW Forever. Cross-platform (macOS, Windows, Linux).
+"""WoWYap helper for WoW Forever. Cross-platform (macOS, Windows, Linux).
 
 Hold the trigger key/button: record the mic.
 Release: stop, transcribe locally with Whisper, then pass a checked packet to
 the addon using reserved function keys. Direct delivery never opens chat.
 
 Settings (trigger button, hotkey) come from the addon's SavedVariables file,
-written by `/gps setup` in game. Everything runs locally; no audio leaves the PC.
+written by `/yap setup` in game. Everything runs locally; no audio leaves the PC.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from pynput.mouse import Listener as MouseListener  # noqa: E402
 SAMPLE_RATE = 16_000
 DEFAULT_CLOSE_COMMAND = "/click InputFunctionBindingButton_PAD2 LeftButton 1"
 SYSTEM = platform.system()  # "Darwin", "Windows", "Linux"
-CONFIG_NAME = "GamepadSpeak.ini"
+CONFIG_NAME = "WoWYap.ini"
 
 
 def log(text: str) -> None:
@@ -57,8 +57,13 @@ def app_root() -> Path:
 
 def bundled_addon_dir() -> Path | None:
     root = app_root()
-    for candidate in (root / "addon" / "GamepadSpeak", root / "GamepadSpeak"):
-        if (candidate / "GamepadSpeak.toc").is_file():
+    for candidate in (
+        root / "addon" / "WoWYap",
+        root / "WoWYap",
+        root / "addon" / "GamepadSpeak",  # legacy package layout
+        root / "GamepadSpeak",
+    ):
+        if (candidate / "WoWYap.toc").is_file() or (candidate / "GamepadSpeak.toc").is_file():
             return candidate
     return None
 
@@ -82,7 +87,7 @@ def config_path() -> Path:
 
 
 def load_user_config() -> dict[str, str]:
-    """Optional GamepadSpeak.ini next to the app (no PowerShell needed to set WoW path)."""
+    """Optional WoWYap.ini next to the app (no PowerShell needed to set WoW path)."""
     path = config_path()
     if not path.is_file():
         return {}
@@ -94,12 +99,13 @@ def load_user_config() -> dict[str, str]:
             if line.strip() and not line.lstrip().startswith("#")
         )
         if body and not body.lstrip().startswith("["):
-            text = "[gamepadspeak]\n" + text
+            text = "[wowyap]\n" + text
         parser.read_string(text)
     except (OSError, configparser.Error) as e:
         log(f"Could not read {path.name}: {e}")
         return {}
-    section = "gamepadspeak" if parser.has_section("gamepadspeak") else parser.default_section
+    section = "wowyap" if parser.has_section("wowyap") else (
+        "gamepadspeak" if parser.has_section("gamepadspeak") else parser.default_section)
     return {k.lower(): v.strip() for k, v in parser.items(section) if v.strip()}
 
 
@@ -109,7 +115,7 @@ def write_config_template(wow_dir: Path) -> None:
         return
     path.write_text(
         "# Optional settings. Edit this file in Notepad — no PowerShell required.\n"
-        "[gamepadspeak]\n"
+        "[wowyap]\n"
         f"wow_dir = {wow_dir}\n"
         "# model = tiny.en\n"
         "# silent = false\n",
@@ -131,22 +137,36 @@ def addon_signature(folder: Path) -> dict[str, str]:
     return out
 
 
+def sync_error_hint(wow_dir: Path, err: BaseException) -> str:
+    msg = str(err).lower()
+    if isinstance(err, PermissionError) or "access is denied" in msg or "winerror 5" in msg:
+        return (
+            f"Cannot write to {wow_dir / 'Interface' / 'AddOns'}. "
+            "WoW is probably not installed under Program Files on this PC. "
+            f"Edit {CONFIG_NAME} next to Start.cmd and set wow_dir to your real folder, e.g.\n"
+            "  wow_dir = D:\\MYFAVORITEMONSTERGAME\\World of Warcraft\\_classic_beta_\n"
+            "Or run once: Start.cmd --wow-dir \"D:\\...\\World of Warcraft\\_classic_beta_\""
+        )
+    return f"Cannot write AddOns folder ({wow_dir / 'Interface' / 'AddOns'}): {err}"
+
+
 def sync_addon(wow_dir: Path, source: Path | None = None) -> str:
     """Copy the bundled addon into WoW AddOns. Returns 'installed', 'updated', or 'ok'."""
     source = source or bundled_addon_dir()
     if source is None:
         return "missing"
     addons = wow_dir / "Interface" / "AddOns"
-    target = addons / "GamepadSpeak"
+    target = addons / "WoWYap"
+    legacy = addons / "GamepadSpeak"
     try:
         addons.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        raise RuntimeError(f"Cannot write AddOns folder ({addons}): {e}") from e
+        raise RuntimeError(sync_error_hint(wow_dir, e)) from e
     src_sig = addon_signature(source)
     if target.is_dir() and addon_signature(target) == src_sig:
         return "ok"
     action = "updated" if target.exists() else "installed"
-    staging = addons / f".GamepadSpeak.staging-{os.getpid()}"
+    staging = addons / f".WoWYap.staging-{os.getpid()}"
     if staging.exists():
         shutil.rmtree(staging)
     try:
@@ -154,10 +174,12 @@ def sync_addon(wow_dir: Path, source: Path | None = None) -> str:
         if target.exists():
             shutil.rmtree(target)
         staging.rename(target)
-    except OSError:
+        if legacy.exists():
+            shutil.rmtree(legacy, ignore_errors=True)
+    except OSError as err:
         if staging.exists():
             shutil.rmtree(staging, ignore_errors=True)
-        raise
+        raise RuntimeError(sync_error_hint(wow_dir, err)) from err
     return action
 
 
@@ -183,7 +205,7 @@ class AddonSettings:
 
 
 class SavedVariables:
-    """Reads GamepadSpeakDB from WTF/Account/<acct>/SavedVariables/GamepadSpeak.lua."""
+    """Reads WoWYapDB (or legacy GamepadSpeakDB) from SavedVariables."""
 
     def __init__(self, wow_dir: Path):
         self.wow_dir = wow_dir
@@ -195,7 +217,10 @@ class SavedVariables:
         accounts = self.wow_dir / "WTF" / "Account"
         if not accounts.is_dir():
             return None
-        candidates = [p for p in accounts.glob("*/SavedVariables/GamepadSpeak.lua") if p.is_file()]
+        names = ("WoWYap.lua", "GamepadSpeak.lua")  # new name, then legacy
+        candidates = []
+        for name in names:
+            candidates.extend(p for p in accounts.glob(f"*/SavedVariables/{name}") if p.is_file())
         if not candidates:
             return None
         return max(candidates, key=lambda p: p.stat().st_mtime)
@@ -1074,7 +1099,7 @@ class Coordinator:
                 self.recorder.stop()
             finally:
                 self.state = self.IDLE
-            log("Recording cancelled (focus or settings changed)")
+            log("Yapping cancelled (focus or settings changed)")
 
     def close(self):
         self.cancel_recording()
@@ -1092,7 +1117,7 @@ class Coordinator:
         self.state = self.RECORDING
         self.record_start = time.monotonic()
         self.sounds.play(self.sounds.start_tone)
-        log("Recording...")
+        log("Yapping...")
 
     def end_recording(self) -> None:
         if self.state != self.RECORDING:
@@ -1186,7 +1211,7 @@ def run_check(args) -> None:
     print(f"Bundled addon:  {bundled_addon_dir() or 'not found'}")
     print(f"WoW dir:        {args.wow_dir} {'(ok)' if Path(args.wow_dir).exists() else '(MISSING)'}")
     print(f"Config file:    {config_path()} {'(present)' if config_path().is_file() else '(optional)'}")
-    installed = Path(args.wow_dir) / "Interface" / "AddOns" / "GamepadSpeak"
+    installed = Path(args.wow_dir) / "Interface" / "AddOns" / "WoWYap"
     print(f"Installed addon: {installed} {'(ok)' if installed.is_dir() else '(missing — will sync on start)'}")
     print(f"Settings file:  {saved.path or 'not found'}")
     trigger = args.button or saved.settings.trigger or "F8"
@@ -1220,13 +1245,13 @@ def apply_startup(args) -> None:
         result = sync_addon(wow)
     except Exception as e:
         log(f"Addon sync failed: {e}")
-        log("Fix wow_dir in GamepadSpeak.ini (or pass --wow-dir), then restart.")
+        log("Fix wow_dir in WoWYap.ini (or pass --wow-dir), then restart.")
         return
     if result == "missing":
         log("No bundled addon folder found next to the helper; skipping sync.")
     elif result == "installed":
-        log(f"Addon installed into {wow / 'Interface' / 'AddOns' / 'GamepadSpeak'}")
-        log("In WoW: enable GamepadSpeak, then /reload")
+        log(f"Addon installed into {wow / 'Interface' / 'AddOns' / 'WoWYap'}")
+        log("In WoW: enable WoWYap, then /reload")
     elif result == "updated":
         log("Addon updated in WoW AddOns. In game type /reload so the new version loads.")
     else:
@@ -1236,11 +1261,11 @@ def apply_startup(args) -> None:
 def main() -> None:
     config = load_user_config()
     ap = argparse.ArgumentParser(
-        description="GamepadSpeak helper: hold-to-talk voice to WoW chat. "
+        description="WoWYap helper: hold-to-yap voice to WoW chat. "
                     "Double-click Start.cmd on Windows — no PowerShell required.")
     ap.add_argument("--wow-dir", default=None,
                     help="WoW flavor directory (the _classic_beta_ folder). "
-                         "Overrides GamepadSpeak.ini and WOW_DIR.")
+                         "Overrides WoWYap.ini and WOW_DIR.")
     ap.add_argument("--button", help="Override the in-game trigger, e.g. F8, CTRL-F9 or PADSOCIAL")
     ap.add_argument("--raw-button", type=int, help="Use a raw joystick button index instead of an SDL mapping")
     ap.add_argument("--language", help="Speech language code, e.g. en or bg (default: auto-detect)")
@@ -1293,7 +1318,7 @@ def main() -> None:
         result = sync_addon(Path(args.wow_dir))
         if result == "missing":
             raise SystemExit("Bundled addon not found next to the helper")
-        print(f"Addon {result}: {Path(args.wow_dir) / 'Interface' / 'AddOns' / 'GamepadSpeak'}")
+        print(f"Addon {result}: {Path(args.wow_dir) / 'Interface' / 'AddOns' / 'WoWYap'}")
         return
 
     if args.check:
