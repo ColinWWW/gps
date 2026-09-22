@@ -1,5 +1,10 @@
-# Windows: run the helper. Extra flags pass through, e.g. .\run-helper.ps1 --language bg
+# Windows: run the helper (PowerShell). Prefer double-clicking Start.cmd.
 $ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
+if (Test-Path ".\GamepadSpeak.exe") {
+  & ".\GamepadSpeak.exe" @args
+  exit $LASTEXITCODE
+}
 Set-Location (Join-Path $PSScriptRoot "helper")
 if (Get-Command uv -ErrorAction SilentlyContinue) {
   uv run --quiet python gamepadspeak_helper.py @args
@@ -11,3 +16,4 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
   .venv\Scripts\python.exe -m pip install --quiet .
 }
 .venv\Scripts\python.exe gamepadspeak_helper.py @args
+exit $LASTEXITCODE

@@ -1,19 +1,12 @@
 #!/bin/sh
-# macOS / Linux: link the addon into WoW Forever and prepare the helper environment.
+# macOS / Linux: prepare helper env. The helper itself syncs the addon on start.
 set -e
 cd "$(dirname "$0")"
-WOW_DIR="${WOW_DIR:-/Applications/World of Warcraft/_classic_beta_}"
-ADDONS="$WOW_DIR/Interface/AddOns"
-mkdir -p "$ADDONS"
-# A real copy, not a symlink: WoW Forever did not load SavedVariables for a symlinked addon folder.
-[ -L "$ADDONS/GamepadSpeak" ] && rm "$ADDONS/GamepadSpeak"
-rm -rf "$ADDONS/GamepadSpeak"
-cp -R "$PWD/addon/GamepadSpeak" "$ADDONS/GamepadSpeak"
-echo "Addon copied: $ADDONS/GamepadSpeak (re-run ./install.sh after editing the addon)"
 if command -v uv >/dev/null 2>&1; then
   (cd helper && uv sync --quiet)
   echo "Helper environment ready (uv)."
 else
   echo "uv not found; ./run-helper.sh will create a venv with pip on first run."
 fi
-echo "Next: in game run /gps setup, then ./run-helper.sh"
+echo "Next: ./run-helper.sh  (auto-installs/updates the addon into WoW, then starts)"
+echo "Set WOW_DIR if needed, or create GamepadSpeak.ini with wow_dir=..."

@@ -18,10 +18,18 @@ jobs:
       - name: Package console helper
         working-directory: helper
         run: python -m PyInstaller --noconfirm --onedir --name GamepadSpeak --collect-all faster_whisper --collect-all ctranslate2 --collect-all tokenizers --collect-all sounddevice --hidden-import pygame._sdl2.controller --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32 gamepadspeak_helper.py
+      - name: Assemble double-click package
+        shell: pwsh
+        run: |
+          $out = "package/GamepadSpeak"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -Recurse helper/dist/GamepadSpeak/* $out/
+          New-Item -ItemType Directory -Force -Path "$out/addon" | Out-Null
+          Copy-Item -Recurse addon/GamepadSpeak "$out/addon/GamepadSpeak"
+          Copy-Item Start.cmd, Check.cmd, Install.cmd, GamepadSpeak.ini.example, README.md $out/
+          # Frozen exe lives next to Start.cmd; app_root() finds addon/GamepadSpeak.
+          Get-ChildItem $out | Select-Object Name
       - uses: actions/upload-artifact@v4
         with:
           name: GamepadSpeak-Windows
-          path: |
-            helper/dist/GamepadSpeak/
-            addon/GamepadSpeak/
-            README.md
+          path: package/GamepadSpeak/

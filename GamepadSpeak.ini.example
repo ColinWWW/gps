@@ -1,0 +1,7 @@
+# Optional settings. Double-click Start.cmd — you usually do not need this file.
+# If WoW is not under Program Files, set wow_dir to your _classic_beta_ folder.
+
+[gamepadspeak]
+# wow_dir = C:\Program Files (x86)\World of Warcraft\_classic_beta_
+# model = tiny.en
+# silent = false

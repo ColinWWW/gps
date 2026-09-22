@@ -8,14 +8,38 @@ The default model is `tiny.en`, with English selected automatically, running on 
 
 This is still a WoW addon **plus an external helper**. WoW addons cannot capture the microphone or run Whisper themselves. The helper must remain running. This source targets the original WoW Forever client (Interface 16001); other Retail/Classic versions have not been validated.
 
-## Windows setup
+## Windows setup (double-click)
 
-1. Install Python 3.12 or 3.13 if you are running from source.
-2. Close WoW, extract this repository, and run `install.ps1` in PowerShell. If necessary, set `$env:WOW_DIR` to your WoW `_classic_beta_` directory first.
-3. Enable GamepadSpeak in WoW and run `/gps` (or `/gps settings`). The panel is also under **Options → AddOns → GamepadSpeak** where supported.
-4. F8 is the default. Click **Change keyboard key**, then press your desired key, optionally with Ctrl, Shift, or Alt. **Selecting the key saves it and reloads the UI.** Escape cancels. The helper reads the saved setting within about two seconds. If the client refuses the automatic reload, type `/reload`.
-5. Run `run-helper.ps1`. On first launch it downloads the selected Whisper model; wait for **Ready** before speaking.
-6. Run `/reload` once after installing the updated addon, then start the helper. `/gps status` should show **Direct delivery: ready**. With WoW focused, hold your trigger while speaking, then release. The addon sends the transcript directly without opening chat or changing movement input.
+No PowerShell required for normal use.
+
+1. Download the **GamepadSpeak-Windows** artifact from [GitHub Actions](../../actions) (**Build Windows helper**), or use this repository checkout.
+2. Close WoW. Double-click **`Start.cmd`**.
+   - It copies/updates the addon into WoW automatically.
+   - It starts the helper and keeps a console window open (leave it open while you play).
+3. In WoW, enable **GamepadSpeak** if prompted, then type **`/reload`**.
+4. Open **`/gps`** (or Options → AddOns → GamepadSpeak), pick your hold-to-talk key or mouse button, then speak.
+
+If WoW is not under the default Program Files path, edit **`GamepadSpeak.ini`** next to `Start.cmd` (a template is created on first run; see `GamepadSpeak.ini.example`).
+
+| Double-click | What it does |
+|---|---|
+| **Start.cmd** | Sync addon + run helper (daily use) |
+| **Install.cmd** | Sync addon only, then exit |
+| **Check.cmd** | Print mic / WoW path / settings diagnostics |
+
+`install.ps1` / `run-helper.ps1` still work if you prefer PowerShell.
+
+### Updating
+
+Replace the folder with a newer Actions build (or `git pull`), then double-click **Start.cmd** again. The helper refreshes the addon in WoW; type **`/reload`** in game when it says the addon was updated.
+
+### From source (developers)
+
+Install [Python 3.12+](https://www.python.org/downloads/) (or [uv](https://github.com/astral-sh/uv)). Double-click **Start.cmd** — it creates a local `.venv` on first run. Optional: `run-helper.ps1 --language en`.
+
+## In-game options
+
+F8 is the default. Click **Change keyboard key**, then press your desired key, optionally with Ctrl, Shift, or Alt. **Selecting the key saves it and reloads the UI.** Escape cancels. The helper reads the saved setting within about two seconds. If the client refuses the automatic reload, type `/reload`.
 
 Supported keyboard keys: F1–F8 and F15–F20 (where supported by your client; F9–F14 are reserved for delivery), A–Z, 0–9, Insert/Delete, Home/End, Page Up/Down, and arrow keys, with optional Ctrl/Shift/Alt. Use an unused key: existing game actions are not unbound. On Windows, select **Use Mouse4** or **Use Mouse5** in `/gps settings` (or run `/gps mouse4` / `/gps mouse5`). These are the physical back/forward side buttons; mouse software must not remap them to keyboard keys. Selecting one saves and reloads the UI. Existing mouse bindings still fire. Direct delivery supports held modifiers and movement keys.
 
@@ -29,11 +53,11 @@ Recording cues are now quieter, lower-pitched single tones with smooth fades. Us
 
 - `/gps setup`: choose a keyboard key and reload.
 - `/gps status`: inspect settings.
-- `run-helper.ps1 --check`: inspect microphone, settings path and foreground detection.
-- `run-helper.ps1 --input-device "Microphone name"`: select a microphone.
-- `run-helper.ps1 --model small --language en`: choose recognition settings.
-- `run-helper.ps1 --wow-dir "C:\path\to\_classic_beta_"`: point the helper at the same WoW installation as the addon.
-- `run-helper.ps1 --button F9`: temporary helper-only override; normally use the in-game setting so the indicator agrees.
+- `Check.cmd` or `run-helper.ps1 --check`: inspect microphone, settings path and foreground detection.
+- `Start.cmd --input-device "Microphone name"`: select a microphone.
+- `Start.cmd --model small --language en`: choose recognition settings.
+- Edit `GamepadSpeak.ini` or pass `--wow-dir "C:\path\to\_classic_beta_"`: point the helper at the same WoW installation as the addon.
+- `Start.cmd --button F8`: temporary helper-only override; normally use the in-game setting so the indicator agrees.
 
 Recording starts only when WoW is detected in the foreground. Leaving WoW cancels the recording or pending delivery. Failure to identify the foreground window also prevents recording. Recordings are capped at 60 seconds by default. If the talk trigger remains held for five seconds after transcription, delivery is discarded. In legacy chat mode, held modifiers also delay delivery. Empty speech, microphone and transcription failures return the helper to idle.
 
@@ -41,9 +65,13 @@ The addon clears its indicator after a direct send attempt. The helper cannot re
 
 The helper records/transcribes locally. Model downloads need internet; audio is not uploaded. Transcripts appear in the helper console and are sent to WoW chat.
 
+## Performance / language choice
+
+**Python is the right tool for this helper.** Almost all latency is Whisper transcription (`faster-whisper` / CTranslate2), which already runs in native C++ (and optional CUDA). The Python layer only records audio, watches keys/mouse, and injects a short key packet — rewriting that glue in Rust, Go, or C# would not meaningfully speed up speak→chat. For day-to-day use, prefer the packaged **`.exe`** from Actions so you never install Python.
+
 ## Windows executable build
 
-The **Build Windows helper** GitHub Actions workflow builds a console `.exe` and its dependency folder. Run it from the repository's Actions tab, then download the `GamepadSpeak-Windows` artifact. Keep the executable with all files in its folder; copy `addon/GamepadSpeak` into WoW's `Interface/AddOns` directory. The `.exe` accepts the same helper options, including `--wow-dir`.
+The **Build Windows helper** GitHub Actions workflow builds a console `.exe`, bundles the addon, and includes **Start.cmd** / **Install.cmd** / **Check.cmd**. Run it from the repository's Actions tab, then download the `GamepadSpeak-Windows` artifact. Extract the folder anywhere and double-click **Start.cmd**. The `.exe` accepts the same helper options, including `--wow-dir`.
 
 A successful workflow run is required before claiming a working executable. Live microphone capture, key delivery, and addon behavior must still be checked inside WoW on Windows.
 
@@ -55,7 +83,7 @@ Install helper dependencies and `lupa`, then run:
 python -m unittest discover -s tests -v
 ```
 
-Tests cover key repeats, short controller holds, modifier release order, focus restrictions, error recovery, settings selection/persistence, and the addon recording/release indicator using a stubbed WoW API. They do not replace an in-game integration test.
+Tests cover key repeats, short controller holds, modifier release order, focus restrictions, error recovery, settings selection/persistence, addon sync, and the addon recording/release indicator using a stubbed WoW API. They do not replace an in-game integration test.
 
 ## Direct delivery (no chat focus)
 

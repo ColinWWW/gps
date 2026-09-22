@@ -2,6 +2,7 @@
 import os
 os.environ['PYNPUT_BACKEND'] = 'dummy'
 import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -44,6 +45,23 @@ class HoldTests(unittest.TestCase):
         w.events.put((SimpleNamespace(name='x1'), False))
         w.pump()
         release.assert_called_once()
+
+    def test_addon_sync_install_update_and_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wow = Path(tmp) / 'wow'
+            self.assertEqual(gps.sync_addon(wow), 'installed')
+            self.assertTrue((wow / 'Interface' / 'AddOns' / 'GamepadSpeak' / 'GamepadSpeak.toc').is_file())
+            self.assertEqual(gps.sync_addon(wow), 'ok')
+            dest = wow / 'Interface' / 'AddOns' / 'GamepadSpeak' / 'GamepadSpeak.toc'
+            dest.write_text(dest.read_text(encoding='utf-8') + '\n## X-Test: 1\n', encoding='utf-8')
+            self.assertEqual(gps.sync_addon(wow), 'updated')
+            cfg = Path(tmp) / 'GamepadSpeak.ini'
+            cfg.write_text('# comment\n[gamepadspeak]\nwow_dir = C:\\Games\\WoW\nmodel = base.en\n', encoding='utf-8')
+            with patch.object(gps, 'config_path', return_value=cfg):
+                loaded = gps.load_user_config()
+            self.assertEqual(loaded['wow_dir'], r'C:\Games\WoW')
+            self.assertEqual(loaded['model'], 'base.en')
+            self.assertEqual(gps.resolve_wow_dir(None, loaded), Path(r'C:\Games\WoW'))
 
     def test_softer_sounds_have_smooth_edges_and_low_peak(self):
         sounds = gps.Sounds(True)
