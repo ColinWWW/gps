@@ -46,9 +46,6 @@ local function sendMessage(text, route)
         ok, err = pcall(send, text, channel, nil, target)
     else
         ok, err = pcall(send, text, channel)
-        if not ok then
-            ok, err = pcall(send, text, channel, nil, nil)
-        end
     end
     if not ok then report("Direct send blocked: " .. tostring(err)); return false end
     return true
@@ -74,10 +71,10 @@ function T.Input(symbolName)
         return
     end
     if GetTime() - started > 15 then
-        reset(); report("Direct message cancelled (timeout)."); return
+        reset(); report("Direct message cancelled (timeout)."); if complete then complete("idle") end; return
     end
     if GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus() then
-        reset(); report("Direct message cancelled (text field focused)."); return
+        reset(); report("Direct message cancelled (text field focused)."); if complete then complete("idle") end; return
     end
     local digit = tonumber(symbolName)
     if digit == 0 or digit == 1 then
@@ -86,7 +83,7 @@ function T.Input(symbolName)
         if bits == 8 then
             packet[#packet+1] = symbol
             symbol, bits = 0, 0
-            if #packet > 262 then reset(); report("Direct message too long.") end
+            if #packet > 262 then reset(); report("Direct message too long."); if complete then complete("idle") end end
         end
         return
     end
@@ -129,8 +126,8 @@ end
 
 function T.Install(settings, printMessage, onComplete)
     db, report, complete = settings, printMessage, onComplete
-    db.directProtocol = nil
     if InCombatLockdown() then return false end
+    db.directProtocol = nil
     reset()
     if not SetOverrideBinding or not ClearOverrideBindings then
         report("Direct delivery unavailable: binding API missing."); return false
@@ -144,10 +141,15 @@ function T.Install(settings, printMessage, onComplete)
         report("Choose a trigger outside F9-F12 (F11/F12 reserved) for direct delivery.")
         return false
     end
+    for binding in pairs(db.routes or {}) do
+        if keys[binding:match("([^%-]+)$")] then
+            report("Remove the reserved transport key from your chat routes: " .. binding); return false
+        end
+    end
     for key in pairs(keys) do
         for _, prefix in ipairs(prefixes) do
             local action = GetBindingAction(prefix .. key)
-            if action and action ~= "" and action ~= "WOWYAP_OPENCHAT" then
+            if action and action ~= "" and action ~= "WOWYAP_OPENCHAT" and action ~= "GAMEPADSPEAK_OPENCHAT" then
                 report("Direct delivery needs " .. prefix .. key .. " unbound (currently " .. action .. "). Then /reload.")
                 return false
             end

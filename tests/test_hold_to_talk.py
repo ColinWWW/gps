@@ -148,12 +148,12 @@ class HoldTests(unittest.TestCase):
             c.on_release()
         c.recorder.stop.assert_called_once()
 
-    def test_unknown_foreground_still_records(self):
-        # Blank WoW titles used to look like "unknown" and blocked recording.
+    def test_unknown_foreground_does_not_record(self):
+        # Unknown focus is not permission to inject into an arbitrary application.
         c = self.coordinator()
         with patch.object(gps, 'wow_is_frontmost', return_value=None), patch.object(gps, 'foreground_identity', return_value=42):
             c.on_trigger()
-        c.recorder.start.assert_called_once()
+        c.recorder.start.assert_not_called()
 
     def test_focus_loss_discards_transcript(self):
         c = self.coordinator()

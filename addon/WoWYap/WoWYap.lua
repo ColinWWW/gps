@@ -152,7 +152,7 @@ local function Serialize(db)
 			v = EncodeRoutes(v)
 		end
 		if v ~= nil and v ~= false then
-			parts[#parts + 1] = key .. "=" .. tostring(v)
+			parts[#parts + 1] = key .. "=" .. tostring(v):gsub("%%", "%%25"):gsub("%s", function(c) return string.format("%%%02X", string.byte(c)) end)
 		end
 	end
 	return "#WoWYap settings. Do not edit or delete.\n" .. table.concat(parts, " ")
@@ -163,6 +163,7 @@ local function Deserialize(body)
 	if not line then return nil end
 	local out = {}
 	for key, value in line:gmatch("(%w+)=(%S+)") do
+		value = value:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
 		if key == "openOnPress" then
 			out[key] = (value == "true") or nil
 		elseif key == "routes" then
@@ -178,6 +179,10 @@ local function SaveToMacro()
 	local db = GetDB()
 	if InCombatLockdown() then macroDirty = true; return false end
 	local body = Serialize(db)
+	if #body > 255 then
+		msg("Settings exceed the 255-byte macro backup limit. Remove unused routes before saving; backup was not overwritten.")
+		return false
+	end
 	local index = GetMacroIndexByName(MACRO_NAME)
 	if index and index > 0 then
 		if GetMacroBody(index) ~= body then EditMacro(index, MACRO_NAME, MACRO_ICON, body) end
@@ -197,6 +202,7 @@ end
 -- Fills in anything the client failed to hand back. Returns true if the macro had data.
 local function RestoreFromMacro()
 	local index = GetMacroIndexByName(MACRO_NAME)
+	if not index or index == 0 then index = GetMacroIndexByName("GPSpeak") end
 	if not index or index == 0 then return false end
 	local saved = Deserialize(GetMacroBody(index))
 	if not saved then return false end
@@ -472,6 +478,9 @@ local function KeyBinding(key)
 	return prefix .. key
 end
 
+local recordingKeyBinding
+local recordingKeyIsRoute
+
 local function IsSupportedKey(key)
 	local fn = tonumber(key:match("^F(%d+)$"))
 	return (fn and fn >= 1 and fn <= 20) or key:match("^[A-Z0-9]$") or
@@ -494,30 +503,23 @@ observer:SetScript("OnKeyDown", function(_, key)
 		local binding = KeyBinding(key)
 		local base = key
 		local _, matched = RouteForBinding(binding, base)
-		if matched then OnTriggerPressed() end
+		if matched and not triggerHeld then
+			recordingKeyBinding = binding
+			recordingKeyIsRoute = DB.routes and DB.routes[binding] ~= nil
+			OnTriggerPressed()
+		end
 	end
 end)
 observer:SetScript("OnKeyUp", function(_, key)
-	if not triggerHeld or not DB then return end
-	local function released(binding)
-		if not binding then return false end
-		local base = binding:match("([^%-]+)$")
-		return key == base or (binding:find("CTRL%-") and not IsControlKeyDown()) or
+	if not triggerHeld or not DB or not recordingKeyBinding then return end
+	local binding = recordingKeyBinding
+	local released = key == binding:match("([^%-]+)$")
+	if not recordingKeyIsRoute then
+		released = released or (binding:find("CTRL%-") and not IsControlKeyDown()) or
 			(binding:find("SHIFT%-") and not IsShiftKeyDown()) or
 			(binding:find("ALT%-") and not IsAltKeyDown())
 	end
-	if released(DB.trigger) then
-		OnTriggerReleased()
-		return
-	end
-	if type(DB.routes) == "table" then
-		for binding in pairs(DB.routes) do
-			if released(binding) then
-				OnTriggerReleased()
-				return
-			end
-		end
-	end
+	if released then recordingKeyBinding = nil; OnTriggerReleased() end
 end)
 
 local function StartCapture(kind)
@@ -668,6 +670,21 @@ local function ShowStatus()
 		.. ", active device: " .. tostring(C_GamePad and C_GamePad.GetActiveDeviceID and C_GamePad.GetActiveDeviceID() or "?"))
 end
 
+local function NormalizeRouteBinding(binding)
+	binding = binding:upper():gsub("MOUSE", "BUTTON")
+	local base = binding:match("([^%-]+)$")
+	if not base or ({F9=true,F10=true,F11=true,F12=true})[base] then return nil end
+	if base ~= "BUTTON4" and base ~= "BUTTON5" and not IsSupportedKey(base) then return nil end
+	local prefix = binding:sub(1, #binding-#base)
+	local mods = {}
+	for token in prefix:gmatch("([^%-]+)%-") do
+		if not ({CTRL=true,SHIFT=true,ALT=true})[token] or mods[token] then return nil end
+		mods[token] = true
+	end
+	if prefix:gsub("CTRL%-", ""):gsub("SHIFT%-", ""):gsub("ALT%-", "") ~= "" then return nil end
+	return (mods.CTRL and "CTRL-" or "") .. (mods.SHIFT and "SHIFT-" or "") .. (mods.ALT and "ALT-" or "") .. base
+end
+
 local function SlashHandler(input)
 	local DB = GetDB()
 	input = (input or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -720,11 +737,15 @@ local function SlashHandler(input)
 		if not binding then
 			msg("Usage: /gps route <binding> <say|general|guild|party|raid|yell|officer|instance|clear>")
 			msg("Example: /gps route BUTTON4 say   /gps route SHIFT-BUTTON4 general")
+		elseif not NormalizeRouteBinding(binding) then
+			msg("Invalid route binding. Use a supported key or Mouse4/Mouse5; F9-F12 are reserved.")
 		elseif channel:lower() == "clear" then
+			binding = NormalizeRouteBinding(binding)
 			if type(DB.routes) == "table" then DB.routes[binding:upper()] = nil end
 			SaveToMacro()
-			msg("Cleared route for " .. binding:upper())
+			msg("Cleared route for " .. binding:upper() .. ". /reload so the helper reads it.")
 		elseif ROUTE_NAMES[channel:lower()] then
+			binding = NormalizeRouteBinding(binding)
 			DB.routes = DB.routes or {}
 			DB.routes[binding:upper()] = ROUTE_NAMES[channel:lower()]
 			if not DB.trigger then
@@ -747,7 +768,7 @@ local function SlashHandler(input)
 		elseif rest:lower() == "clear" then
 			DB.routes = nil
 			SaveToMacro()
-			msg("All chat routes cleared.")
+			msg("All chat routes cleared. /reload so the helper reads it.")
 		else
 			msg("Usage: /gps routes mouse|clear")
 		end

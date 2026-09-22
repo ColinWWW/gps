@@ -14,6 +14,8 @@ from __future__ import annotations
 import argparse
 import configparser
 import ctypes
+import hashlib
+import math
 import os
 import platform
 import queue
@@ -91,9 +93,9 @@ def load_user_config() -> dict[str, str]:
     path = config_path()
     if not path.is_file():
         return {}
-    parser = configparser.ConfigParser()
+    parser = configparser.ConfigParser(interpolation=None)
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
         body = "\n".join(
             line for line in text.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
@@ -125,15 +127,14 @@ def write_config_template(wow_dir: Path) -> None:
 
 
 def addon_signature(folder: Path) -> dict[str, str]:
-    """Relative path -> sha1-ish size+mtime fingerprint for sync comparison."""
+    """Compare content, including same-size edits with preserved timestamps."""
     out: dict[str, str] = {}
     if not folder.is_dir():
         return out
     for path in sorted(folder.rglob("*")):
         if path.is_file():
             rel = path.relative_to(folder).as_posix()
-            st = path.stat()
-            out[rel] = f"{st.st_size}:{int(st.st_mtime)}"
+            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
     return out
 
 
@@ -164,6 +165,8 @@ def sync_addon(wow_dir: Path, source: Path | None = None) -> str:
         raise RuntimeError(sync_error_hint(wow_dir, e)) from e
     src_sig = addon_signature(source)
     if target.is_dir() and addon_signature(target) == src_sig:
+        if legacy.exists():
+            shutil.rmtree(legacy)
         return "ok"
     action = "updated" if target.exists() else "installed"
     staging = addons / f".WoWYap.staging-{os.getpid()}"
@@ -209,7 +212,7 @@ class SavedVariables:
 
     def __init__(self, wow_dir: Path):
         self.wow_dir = wow_dir
-        self._mtime: float | None = None
+        self._mtime = None
         self.settings = AddonSettings()
 
     @property
@@ -218,22 +221,21 @@ class SavedVariables:
         if not accounts.is_dir():
             return None
         names = ("WoWYap.lua", "GamepadSpeak.lua")  # new name, then legacy
-        candidates = []
         for name in names:
-            candidates.extend(p for p in accounts.glob(f"*/SavedVariables/{name}") if p.is_file())
-        if not candidates:
-            return None
-        return max(candidates, key=lambda p: p.stat().st_mtime)
+            candidates = [p for p in accounts.glob(f"*/SavedVariables/{name}") if p.is_file()]
+            if candidates:
+                return max(candidates, key=lambda p: p.stat().st_mtime_ns)
+        return None
 
     def refresh(self) -> bool:
         """Re-read the file if it changed. Returns True when settings changed."""
         p = self.path
         if p is None:
             return False
-        mtime = p.stat().st_mtime
+        stat = p.stat()
+        mtime = (p, stat.st_mtime_ns, stat.st_size)
         if self._mtime == mtime:
             return False
-        self._mtime = mtime
         text = p.read_text(encoding="utf-8", errors="replace")
         new = AddonSettings(
             trigger=self._value("trigger", text),
@@ -244,6 +246,7 @@ class SavedVariables:
             routes=self._routes(text),
             general_channel=self._value("generalChannel", text),
         )
+        self._mtime = mtime
         changed = new != self.settings
         self.settings = new
         return changed
@@ -356,7 +359,7 @@ class ControllerWatcher:
         elif trigger in PAD_TO_SDL_BUTTON:
             self._button_const = _const(PAD_TO_SDL_BUTTON[trigger])
             if self._button_const is None:
-                log(f"This SDL build has no {PAD_TO_SDL_BUTTON[trigger]}; pick another button in /gps setup")
+                log(f"This SDL build has no {PAD_TO_SDL_BUTTON[trigger]}; pick another button in /yap setup")
         else:
             log(f"Unknown trigger '{trigger}'")
         if self._button_const is not None or self._axis_const is not None:
@@ -536,6 +539,7 @@ class KeyboardWatcher:
         self.binding = set()
         self.routes: dict[str, int] = {}
         self.active_route = 0
+        self.active_key = None
         self.delivery_guard = None
         self.listener = None
 
@@ -562,6 +566,8 @@ class KeyboardWatcher:
     def filter_delivery_keys(self, msg, data):
         # Keep injected transcript events and physical key-up events flowing.
         # Blocking only physical key-down/repeat avoids stuck movement keys.
+        if data.flags & 0x12 and getattr(data, "vkCode", None) in _VK_FKEYS.values():
+            return False
         guard = self.delivery_guard
         if (guard is not None and msg in (0x0100, 0x0104)
                 and not (data.flags & 0x12) and guard()):
@@ -576,16 +582,18 @@ class KeyboardWatcher:
         )
         self.listener.start()
 
-    def _match_route(self, names: set[str]) -> int | None:
+    def _match_route(self, names: set[str], pressed_name: str | None = None) -> int | None:
         best = None
         best_size = -1
         for binding, route in self.routes.items():
             parts = set(binding.upper().split("-"))
+            if pressed_name and binding.split("-")[-1] != pressed_name:
+                continue
             if parts <= names and len(parts) > best_size:
                 best, best_size = route, len(parts)
         if best is not None:
             return best
-        if self.binding and self.binding <= names:
+        if self.binding and self.binding <= names and (not pressed_name or pressed_name in self.binding):
             return 0
         return None
 
@@ -598,15 +606,21 @@ class KeyboardWatcher:
             else:
                 self.down.discard(key)
             names = {self.name(k) for k in self.down}
-            route = self._match_route(names)
+            if self.active:
+                active = self.active_key in names if self.active_route else bool(self.binding and self.binding <= names)
+                if not active:
+                    self.active = False
+                    self.on_release()
+                continue
+            if not pressed:
+                continue
+            route = self._match_route(names, self.name(key))
             active = route is not None
             if active and not self.active:
                 self.active = True
                 self.active_route = route or 0
+                self.active_key = self.name(key)
                 self.on_press(self.active_route)
-            elif not active and self.active:
-                self.active = False
-                self.on_release()
         if self.listener is not None and not self.listener.is_alive():
             raise RuntimeError("Keyboard listener stopped; restart the helper")
 
@@ -636,13 +650,15 @@ class MouseWatcher:
         while not self.events.empty():
             self.events.get()
 
+    def _on_click(self, x, y, button, pressed):
+        self.events.put((button, pressed, frozenset(self.modifiers())))
+
     def start(self):
-        self.listener = MouseListener(on_click=lambda x, y, button, pressed:
-                                     self.events.put((button, pressed)))
+        self.listener = MouseListener(on_click=self._on_click)
         self.listener.start()
 
-    def _binding(self, button_name: str) -> str:
-        mods = self.modifiers()
+    def _binding(self, button_name: str, mods=None) -> str:
+        mods = self.modifiers() if mods is None else mods
         prefix = ""
         for name in ("CTRL", "SHIFT", "ALT"):
             if name in mods:
@@ -651,12 +667,14 @@ class MouseWatcher:
 
     def pump(self):
         while not self.events.empty():
-            button, pressed = self.events.get()
+            event = self.events.get()
+            button, pressed = event[:2]
+            mods = event[2] if len(event) > 2 else None
             name = {"x1": "BUTTON4", "x2": "BUTTON5"}.get(getattr(button, "name", None))
             if name is None:
                 continue
             if pressed and not self.active:
-                binding = self._binding(name)
+                binding = self._binding(name, mods)
                 if binding in self.routes:
                     route = self.routes[binding]
                 elif name == self.trigger:
@@ -687,7 +705,7 @@ def direct_packet(text: str, route: int = 0) -> bytes:
         raise ValueError("Direct messages must contain 1-255 UTF-8 bytes; try a shorter sentence")
     if any(b < 32 or b == 127 for b in payload):
         raise ValueError("Invalid control character in transcript")
-    if not 0 <= route <= 255:
+    if route not in range(9):
         raise ValueError("Invalid chat route")
     body = b"GP\x02" + bytes([len(payload), route]) + payload
     checksum = 0
@@ -701,10 +719,12 @@ DIRECT_BIT_KEYS = (Key.f9, Key.f10)
 
 
 class Injector:
-    def __init__(self, char_delay: float = 0.002, packet_delay: float = 0.0025):
+    def __init__(self, char_delay: float = 0.002, packet_delay: float = 0.0025, key_hold: float = 0):
         self.kb = KeyboardController()
         self.char_delay = char_delay
         self.packet_delay = packet_delay
+        self.key_hold = key_hold
+        self._windows_sender = None
 
     def press_hotkey(self, hk: Hotkey) -> None:
         for m in hk.modifiers:
@@ -730,30 +750,38 @@ class Injector:
         self.kb.release(Key.enter)
 
     def deliver_direct(self, text: str, route: int = 0, allowed=lambda: True) -> None:
-        """Send a checked packet via F9/F10 bits (one pacing pause per byte)."""
+        """Send one byte-sized scan-code batch per pause, leaving WASD untouched."""
         packet = direct_packet(text, route)
+        hold = getattr(self, "key_hold", 0)
+        sender = None
+        if SYSTEM == "Windows":
+            if getattr(self, "_windows_sender", None) is None:
+                self._windows_sender = WindowsKeySender()
+            sender = self._windows_sender
 
-        def tap(key):
+        def emit(vks):
             if not allowed():
                 raise RuntimeError("Direct delivery cancelled: WoW lost focus")
-            if SYSTEM == "Windows":
-                name = getattr(key, "name", None) or str(key)
-                vk = _VK_FKEYS.get(str(name).lower())
-                if vk is None:
-                    raise RuntimeError(f"Unsupported transport key: {key}")
-                windows_tap_vk(vk, hold_seconds=0.001)
+            if sender:
+                sender.send(vks, hold, allowed)
             else:
-                self.kb.press(key)
-                time.sleep(0.001)
-                self.kb.release(key)
-
-        tap(Key.f11)
+                keys = {0x78: DIRECT_BIT_KEYS[0], 0x79: DIRECT_BIT_KEYS[1],
+                        0x7A: Key.f11, 0x7B: Key.f12}
+                for vk in vks:
+                    if not allowed():
+                        raise RuntimeError("Direct delivery cancelled: WoW lost focus")
+                    self.kb.press(keys[vk])
+                    try:
+                        if hold:
+                            time.sleep(hold)
+                    finally:
+                        self.kb.release(keys[vk])
+        emit((0x7A,))
         for byte in packet:
-            for shift in range(7, -1, -1):
-                tap(DIRECT_BIT_KEYS[(byte >> shift) & 1])
-            # One pause per byte (not per bit). WoW often drops symbols if this is too short.
-            time.sleep(self.packet_delay)
-        tap(Key.f12)
+            emit(tuple(0x78 + ((byte >> shift) & 1) for shift in range(7, -1, -1)))
+            if self.packet_delay:
+                time.sleep(self.packet_delay)
+        emit((0x7B,))
 
     def deliver(self, text: str, open_key: Hotkey | None, close_key: Hotkey | None,
                 close_command: str | None, allowed=lambda: True) -> None:
@@ -827,15 +855,20 @@ def windows_foreground_info() -> tuple[str | None, str | None]:
     user32.GetWindowTextW(hwnd, buf, length + 1)
     title = buf.value or None
 
-    pid = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+    kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.QueryFullProcessImageNameW.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_uint32)]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    pid = ctypes.c_uint32()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     exe = None
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
     if handle:
         try:
-            size = ctypes.c_ulong(260)
-            path_buf = ctypes.create_unicode_buffer(260)
+            size = ctypes.c_uint32(32768)
+            path_buf = ctypes.create_unicode_buffer(size.value)
             # QueryFullProcessImageNameW
             if kernel32.QueryFullProcessImageNameW(handle, 0, path_buf, ctypes.byref(size)):
                 exe = Path(path_buf.value).name
@@ -845,11 +878,13 @@ def windows_foreground_info() -> tuple[str | None, str | None]:
 
 
 def looks_like_wow(title: str | None, exe: str | None = None) -> bool:
-    for value in (title, exe):
+    if exe:
+        return exe.lower() in {"wow.exe", "wowclassic.exe", "wowt.exe", "wowb.exe", "world of warcraft.exe"}
+    for value in (title,):
         if not value:
             continue
         n = value.lower()
-        if "warcraft" in n or n.startswith("wow") or "blizzard" in n:
+        if "world of warcraft" in n or n in {"wow", "wow classic", "wow forever"}:
             return True
         # WoW Forever / Classic client binaries are often Wow.exe / WowClassic.exe.
         if n in {"wow.exe", "wowclassic.exe", "wowt.exe", "wowb.exe", "world of warcraft.exe"}:
@@ -887,39 +922,66 @@ _VK_FKEYS = {
 }
 
 
-def windows_tap_vk(vk: int, hold_seconds: float = 0.001) -> None:
-    """Inject a key via SendInput + scan code (more reliable for games than pynput)."""
-    user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-    MAPVK_VK_TO_VSC = 0
-    scan = user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) & 0xFF
-    ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+# Windows has 32-bit DWORD/LONG even in a 64-bit process. The full union is
+# necessary for sizeof(INPUT) to be 40 on x64 and 28 on x86.
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_uint16), ("wScan", ctypes.c_uint16),
+                ("dwFlags", ctypes.c_uint32), ("time", ctypes.c_uint32),
+                ("dwExtraInfo", ctypes.c_size_t)]
 
-    class KEYBDINPUT(ctypes.Structure):
-        _fields_ = (("wVk", ctypes.c_ushort),
-                    ("wScan", ctypes.c_ushort),
-                    ("dwFlags", ctypes.c_ulong),
-                    ("time", ctypes.c_ulong),
-                    ("dwExtraInfo", ULONG_PTR))
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", ctypes.c_int32), ("dy", ctypes.c_int32),
+                ("mouseData", ctypes.c_uint32), ("dwFlags", ctypes.c_uint32),
+                ("time", ctypes.c_uint32), ("dwExtraInfo", ctypes.c_size_t)]
 
-    class INPUT(ctypes.Structure):
-        _fields_ = (("type", ctypes.c_ulong),
-                    ("ki", KEYBDINPUT),
-                    ("padding", ctypes.c_ubyte * 8))
+class _INPUTUNION(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT)]
 
-    INPUT_KEYBOARD = 1
-    KEYEVENTF_SCANCODE = 0x0008
-    KEYEVENTF_KEYUP = 0x0002
+class _INPUT(ctypes.Structure):
+    _anonymous_ = ("data",)
+    _fields_ = [("type", ctypes.c_uint32), ("data", _INPUTUNION)]
 
-    def emit(flags: int) -> None:
-        inp = INPUT(type=INPUT_KEYBOARD,
-                    ki=KEYBDINPUT(0, scan, flags | KEYEVENTF_SCANCODE, 0, 0))
-        if user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT)) != 1:
-            raise RuntimeError("SendInput failed while delivering packet")
+class WindowsKeySender:
+    def __init__(self, user32=None):
+        self.api = user32 or ctypes.windll.user32
+        self.api.SendInput.argtypes = [ctypes.c_uint, ctypes.POINTER(_INPUT), ctypes.c_int]
+        self.api.SendInput.restype = ctypes.c_uint
+        self.api.MapVirtualKeyW.argtypes = [ctypes.c_uint, ctypes.c_uint]
+        self.api.MapVirtualKeyW.restype = ctypes.c_uint
+        self.scans = {vk: self.api.MapVirtualKeyW(vk, 0) & 0xFF for vk in _VK_FKEYS.values()}
+        self.cache = {}
 
-    emit(0)
-    if hold_seconds:
-        time.sleep(hold_seconds)
-    emit(KEYEVENTF_KEYUP)
+    def events(self, vks, up_only=False):
+        events = []
+        for vk in vks:
+            for flags in ((0x000A,) if up_only else (0x0008, 0x000A)):
+                events.append(_INPUT(type=1, ki=_KEYBDINPUT(0, self.scans[vk], flags, 0, 0)))
+        return (_INPUT * len(events))(*events)
+
+    def emit(self, events):
+        sent = self.api.SendInput(len(events), events, ctypes.sizeof(_INPUT))
+        if sent != len(events):
+            # Best effort release of only our reserved keys after partial input.
+            cleanup = self.events(tuple(self.scans), up_only=True)
+            self.api.SendInput(len(cleanup), cleanup, ctypes.sizeof(_INPUT))
+            raise RuntimeError(f"SendInput accepted {sent}/{len(events)} events; packet cancelled")
+
+    def send(self, vks, hold=0, allowed=lambda: True):
+        if not hold:
+            if vks not in self.cache:
+                self.cache[vks] = self.events(vks)
+            self.emit(self.cache[vks])
+            return
+        # Compatibility option for clients that need a measurable key hold.
+        for vk in vks:
+            if not allowed():
+                raise RuntimeError("Direct delivery cancelled: WoW lost focus")
+            events = self.events((vk,))
+            self.emit((_INPUT * 1)(events[0]))
+            try:
+                time.sleep(hold)
+            finally:
+                self.emit((_INPUT * 1)(events[1]))
 
 
 # ---------------------------------------------------------------------------
@@ -958,16 +1020,16 @@ class Coordinator:
     def __init__(self, args):
         self.args = args
         self.saved = SavedVariables(Path(args.wow_dir))
-        self.watcher = ControllerWatcher(self.on_trigger, self.on_release)
-        self.keyboard = KeyboardWatcher(self.on_trigger, self.on_release)
-        self.mouse = MouseWatcher(self.on_trigger, self.on_release)
+        self.watcher = ControllerWatcher(lambda: self.on_trigger(source="controller"), lambda: self.on_release("controller"))
+        self.keyboard = KeyboardWatcher(lambda route: self.on_trigger(route, "keyboard"), lambda: self.on_release("keyboard"))
+        self.mouse = MouseWatcher(lambda route: self.on_trigger(route, "mouse"), lambda: self.on_release("mouse"))
         self.mouse.modifiers = self.physical_modifiers
         self.trigger_type = "keyboard"
         self.target = None
         self.chat_route = 0
         self.cancelled = threading.Event()
         self.recorder = Recorder(device=args.input_device)
-        self.injector = Injector(packet_delay=args.packet_delay)
+        self.injector = Injector(packet_delay=args.packet_delay, key_hold=args.key_hold)
         self.sounds = Sounds(not args.silent)
         self.transcriber: Transcriber | None = None
         self.hotkey: Hotkey | None = None
@@ -998,8 +1060,7 @@ class Coordinator:
         trigger = self.args.button or self.saved.settings.trigger or "F8"
         routes = dict(self.saved.settings.routes) if self.args.delivery == "direct" and not self.args.button else {}
         self.trigger_type = ("gamepad" if self.args.raw_button is not None or trigger.startswith("PAD")
-                             else "mouse" if trigger in ("BUTTON4", "BUTTON5") or any(
-                                 b.endswith(("BUTTON4", "BUTTON5")) for b in routes)
+                             else "mouse" if trigger in ("BUTTON4", "BUTTON5")
                              else "keyboard")
         self.watcher.set_trigger(trigger if self.trigger_type == "gamepad" else None, self.args.raw_button)
         self.keyboard.set_trigger(trigger if self.trigger_type == "keyboard" else None)
@@ -1036,17 +1097,18 @@ class Coordinator:
         self.saved.refresh()
         if self.saved.path is None:
             log(f"Addon settings file not found under {self.saved.wow_dir / 'WTF'}. "
-                "Using F8 by default. Install the addon and use /gps settings to change it.")
+                "Using F8 by default. Install the addon and use /yap settings to change it.")
         self.apply_settings()
         if self.args.delivery == "direct":
             if self.saved.settings.direct_protocol != "2":
                 raise RuntimeError("Direct delivery needs the updated addon: reinstall it, enter WoW, "
-                                   "check /gps status, then /reload and restart the helper")
+                                   "check /yap status, then /reload and restart the helper")
             reserved = {"F9", "F10", "F11", "F12"}
             trigger_key = (self.args.button or self.saved.settings.trigger or "F8").split("-")[-1]
             if trigger_key in reserved:
                 raise RuntimeError("F9-F12 are reserved for direct delivery; choose another talk trigger")
-            log(f"Direct delivery: F9/F10 transport (~{self.args.packet_delay * 1000:.1f}ms/byte). "
+            log(f"Direct delivery: {self.args.packet_delay * 1000:.1f}ms byte pacing, "
+                f"{self.args.key_hold * 1000:.1f}ms key hold. "
                 "Chat stays closed; F9-F12 reserved.")
         self.watcher.start()
         self.keyboard.start()
@@ -1067,29 +1129,30 @@ class Coordinator:
                     self.cancel_recording()
                     self.apply_settings()
             if self.state in (self.RECORDING, self.FINALIZING) and not self.args.any_app:
-                # Only cancel when another app is clearly frontmost (not when unknown).
-                if wow_is_frontmost() is False:
+                # Stay with the exact game window verified at recording start.
+                if foreground_identity() != self.target:
                     self.cancel_recording()
             if self.state == self.RECORDING and now - self.record_start > self.args.max_seconds:
                 log("Max duration reached, stopping")
                 self.end_recording()
             time.sleep(0.01)
 
-    def on_trigger(self, route: int = 0) -> None:
+    def on_trigger(self, route: int = 0, source: str = "keyboard") -> None:
         with self._lock:
             if self.state == self.IDLE:
                 front = wow_is_frontmost()
-                if not self.args.any_app and front is False:
+                if not self.args.any_app and front is not True:
                     log(f"Trigger ignored: WoW is not detected in foreground ({frontmost_app_name() or 'unknown'})")
                     return
                 self.target = foreground_identity()
                 self.chat_route = route
+                self.recording_source = source
                 self.cancelled.clear()
                 self.begin_recording()
 
-    def on_release(self) -> None:
+    def on_release(self, source=None) -> None:
         with self._lock:
-            if self.state == self.RECORDING:
+            if self.state == self.RECORDING and (source is None or source == self.recording_source):
                 self.end_recording()
 
     def cancel_recording(self):
@@ -1151,14 +1214,14 @@ class Coordinator:
             if self.cancelled.is_set():
                 log("Transcript discarded after focus/settings change")
                 return
-            # None = unknown OS focus; do not discard. Only skip when another app is clearly front.
-            if not self.args.any_app and front is False:
+            # Require the same verified game window that began this recording.
+            if not self.args.any_app and (front is not True or foreground_identity() != self.target):
                 log(f"WoW is not the frontmost app ({frontmost_app_name()}); not typing")
                 self.sounds.play(self.sounds.error_tone)
                 return
             direct = self.args.delivery == "direct"
             if direct and self.saved.settings.direct_protocol != "2":
-                raise RuntimeError("Addon direct delivery unavailable; check /gps status and /reload")
+                raise RuntimeError("Addon direct delivery unavailable; check /yap status and /reload")
             # Direct transport uses reserved keys whose modifier variants map to
             # the same symbols, so held Shift/Ctrl during a route press is fine.
             # Legacy text injection must wait for modifiers to be released.
@@ -1177,14 +1240,17 @@ class Coordinator:
                     return False
                 if self.args.any_app:
                     return True
-                # Mid-packet: only abort when another app is known-frontmost.
-                # Unknown (None) and True both allow delivery to finish.
-                return wow_is_frontmost() is not False
+                # Identity was verified once before delivery. Avoid reopening
+                # the foreground process for every bit of the packet.
+                return self.target is not None and foreground_identity() == self.target
 
             if direct:
+                delivery_start = time.monotonic()
                 self.injector.deliver_direct(text, self.chat_route, delivery_allowed)
+                log(f"Timing: transcription={ms}ms delivery={int((time.monotonic()-delivery_start)*1000)}ms "
+                    f"total={int((time.monotonic()-t0)*1000)}ms")
                 log("Key packet sent. In WoW you should see 'Receiving' then 'Sent: ...'. "
-                    "If not, check /gps status and that F9-F12 are free.")
+                    "If not, check /yap status and that F9-F12 are free.")
             else:
                 self.keyboard.delivery_guard = delivery_allowed
                 try:
@@ -1276,7 +1342,9 @@ def main() -> None:
     ap.add_argument("--input-device", help="Mic device name or index for sounddevice")
     ap.add_argument("--delivery", choices=("direct", "chat"), default="direct",
                     help="direct (default): addon sends without opening chat; chat: legacy text injection")
-    ap.add_argument("--packet-delay", type=float, default=0.0025,
+    ap.add_argument("--key-hold", type=float, default=config.get("key_hold", "0"),
+                    help="Compatibility hold per transport key (default 0; try .001 for dropped input)")
+    ap.add_argument("--packet-delay", type=float, default=config.get("packet_delay", "0.0025"),
                     help="Pause after each byte in direct mode (default: 0.0025s). "
                          "Raise to 0.004 if WoW reports incomplete messages; lower for speed.")
     ap.add_argument("--close-command", default="auto",
@@ -1310,8 +1378,10 @@ def main() -> None:
 
     if args.max_seconds <= 0:
         ap.error("--max-seconds must be positive")
-    if args.packet_delay < 0:
-        ap.error("--packet-delay must be non-negative")
+    if not math.isfinite(args.packet_delay) or not 0 <= args.packet_delay <= 0.04:
+        ap.error("--packet-delay must be between 0 and 0.04")
+    if not math.isfinite(args.key_hold) or not 0 <= args.key_hold <= 0.004:
+        ap.error("--key-hold must be between 0 and 0.004")
 
     if args.install_addon:
         write_config_template(Path(args.wow_dir))

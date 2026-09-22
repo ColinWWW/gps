@@ -5,3 +5,7 @@
 # wow_dir = D:\MYFAVORITEMONSTERGAME\World of Warcraft\_classic_beta_
 # model = tiny.en
 # silent = false
+
+# packet_delay = 0.0025
+# key_hold = 0
+# If WoW drops batched packets, try key_hold = 0.001 and packet_delay = 0.004

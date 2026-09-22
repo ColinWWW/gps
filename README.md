@@ -1,6 +1,6 @@
 # WoWYap — WoW hold-to-yap
 
-Based on [kubeden/yap](https://github.com/kubeden/yap). This version adds an **in-game settings panel**, keyboard triggers, and **hold-to-yap** for keyboard and controller input.
+Based on [kubeden/gps](https://github.com/kubeden/gps). This version adds an **in-game settings panel**, keyboard triggers, and **hold-to-yap** for keyboard and controller input.
 
 **Hold F8 → yap → release F8 → local Whisper transcription → WoW chat.**
 
@@ -67,7 +67,11 @@ The helper records/transcribes locally. Model downloads need internet; audio is 
 
 ## Performance / language choice
 
-**Python is the right tool for this helper.** Almost all latency is Whisper transcription (`faster-whisper` / CTranslate2), which already runs in native C++ (and optional CUDA). The Python layer only records audio, watches keys/mouse, and injects a short key packet — rewriting that glue in Rust, Go, or C# would not meaningfully speed up speak→chat. For day-to-day use, prefer the packaged **`.exe`** from Actions so you never install Python.
+Whisper inference already runs through native CTranslate2, but delivery also contributes latency. Earlier versions slept once per **bit**, rebuilt Windows input structures per key, and queried the foreground process per tap. The Windows sender now caches scan codes and sends each byte's 16 key events in one `SendInput` call, with only the configured pause between bytes. Focus is checked against the verified game window before each batch; movement keys are never released or blocked.
+
+At the default 2.5 ms byte pause, a 100-byte message has **267.5 ms of deliberate pacing**, down from about **1,125.5 ms** including the old 1 ms per-key holds. These are scheduled delays, not measured end-to-end latency; OS scheduling, WoW, and transcription add time. The console now reports separate `transcription=...ms`, `delivery=...ms`, and total processing times.
+
+Keep `tiny.en` / CPU / int8 for the existing setup. If WoW reports incomplete packets with batched input, try `Start.cmd --key-hold 0.001 --packet-delay 0.004` to restore individually held keys. You can also put `key_hold = 0.001` and `packet_delay = 0.004` in WoWYap.ini. Default `key_hold = 0` is faster. Both modes use the same checked protocol and preserve chat routes. No live Windows/WoW speedup is claimed from mock tests.
 
 ## Windows executable build
 
@@ -93,6 +97,6 @@ Both addon **and helper** must be updated. Enter WoW and run `/reload` before re
 
 Direct delivery uses `/yap channel` (default SAY; `sticky` also means SAY in this mode) unless a chat route was selected when you pressed the talk button. Each message is limited to 255 UTF-8 bytes; longer messages produce an error asking for a shorter sentence. Partial, corrupted, or timed-out packets are discarded. A manually focused text field prevents a send. Focus loss cancels helper delivery. This is an ordinary key-input/addon-API path, not memory access or a game-client modification.
 
-Transport sends eight F9/F10 taps per UTF-8 byte with one pause after each byte (default `--packet-delay 0.0025`, about 2.5 ms/byte), while movement continues. If WoW reports **Direct message incomplete**, raise delay: `Start.cmd --packet-delay 0.004`. If the client drops input, the checksum rejects the message rather than posting broken text. SendChatMessage restrictions vary by client; a blocked call is reported in-game. We cannot validate the WoW Forever beta from automated tests. If it rejects direct sends, report the in-game error; the helper never silently falls back to opening chat.
+On Windows, transport batches eight F9/F10 taps per UTF-8 byte with one pause after each byte (default `--packet-delay 0.0025`, about 2.5 ms/byte), while movement continues. If WoW reports **Direct message incomplete**, use compatibility pacing: `Start.cmd --key-hold 0.001 --packet-delay 0.004`. If the client drops input, the checksum rejects the message rather than posting broken text. SendChatMessage restrictions vary by client; a blocked call is reported in-game. We cannot validate the WoW Forever beta from automated tests. If it rejects direct sends, report the in-game error; the helper never silently falls back to opening chat.
 
 `--delivery chat` explicitly restores the legacy method, which opens chat and may interrupt movement. On Windows that legacy method briefly suppresses physical key-downs during typing to prevent WASD appearing in the message.

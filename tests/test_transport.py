@@ -65,7 +65,7 @@ class TransportTests(TestCase):
         injector.kb.press.side_effect = lambda key: self.input(symbols[key])
         keys = SimpleNamespace(f9='F9', f10='F10', f11='F11', f12='F12')
         with patch.object(gps, 'Key', keys), patch.object(gps, 'DIRECT_BIT_KEYS', ('F9', 'F10')), \
-                patch.object(gps.time, 'sleep'):
+                patch.object(gps.time, 'sleep'), patch.object(gps, 'SYSTEM', 'Linux'):
             injector.deliver_direct('keep moving', route=1)
         self.assertEqual(self.lua.eval('sent[1].text'), 'keep moving')
         self.assertEqual(self.lua.eval('sent[1].channel'), 'SAY')
@@ -75,10 +75,10 @@ class TransportTests(TestCase):
         injector = gps.Injector(packet_delay=0.0025)
         injector.kb = Mock()
         sleeps = []
-        with patch.object(gps.time, 'sleep', side_effect=lambda s: sleeps.append(s)):
+        with patch.object(gps.time, 'sleep', side_effect=lambda s: sleeps.append(s)), patch.object(gps, 'SYSTEM', 'Linux'):
             injector.deliver_direct('hello world')  # 11 payload + 7 header = 18 bytes
-        # Hold sleep per tap (start + 18*8 bits + send) plus one packet_delay per byte.
-        self.assertEqual(len(sleeps), 146 + 18)
+        # No per-bit holds: one pacing pause for each of the 18 packet bytes.
+        self.assertEqual(len(sleeps), 18)
         self.assertAlmostEqual(sum(s for s in sleeps if s >= 0.002), 0.045, places=3)
 
     def test_corrupt_checksum_and_partial_messages_not_sent(self):
@@ -101,7 +101,7 @@ class TransportTests(TestCase):
         self.lua.execute('blocked=true')
         self.transfer(gps.direct_packet('hello'))
         self.assertEqual(self.lua.eval('#sent'), 0)
-        self.assertEqual(self.lua.eval('done'), 3)  # skipped start + cancelled + blocked send cleanup
+        self.assertEqual(self.lua.eval('done'), 4)  # skipped start + cancelled + blocked send cleanup
         self.assertIn('Direct send blocked', self.lua.eval('notices[#notices]'))
 
     def test_binding_conflict_disables_transport(self):
@@ -140,7 +140,7 @@ class TransportTests(TestCase):
         keys = SimpleNamespace(f9='F9', f10='F10', f11='F11', f12='F12')
         checks = iter([True, True, False])
         with patch.object(gps, 'Key', keys), patch.object(gps, 'DIRECT_BIT_KEYS', ('F9', 'F10')), \
-                patch.object(gps.time, 'sleep'):
+                patch.object(gps.time, 'sleep'), patch.object(gps, 'SYSTEM', 'Linux'):
             with self.assertRaises(RuntimeError):
                 injector.deliver_direct('hello', allowed=lambda: next(checks))
         self.assertNotIn(('F12',), [c.args for c in injector.kb.press.call_args_list])

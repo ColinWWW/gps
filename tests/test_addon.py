@@ -24,7 +24,7 @@ class AddonTests(unittest.TestCase):
           if name then _G[name] = f end
           return f
         end
-        C_Timer = {After=function() end, NewTimer=function() return {Cancel=function() end} end}
+        C_Timer = {After=function() end, NewTimer=function(_, fn) timeout=fn; return {Cancel=function() end} end}
         function InCombatLockdown() return false end
         function GetMacroIndexByName() return macros.body and 1 or 0 end
         function GetMacroBody() return macros.body end
@@ -95,6 +95,25 @@ class AddonTests(unittest.TestCase):
         assert(WoWYapDB.routes['SHIFT-BUTTON4'] == 2)
         assert(WoWYapDB.routes.BUTTON5 == 3)
         assert(reloads == 4)
+        -- Releasing Shift must not end a mouse recording's indicator.
+        timeout() -- previous mocked transcription has finished/timed out
+        ctrl = false; shift = true; mouseDown = 'Button4'
+        WoWYapObserver.scripts.OnUpdate()
+        shift = false
+        WoWYapObserver.scripts.OnKeyUp(nil, 'LSHIFT')
+        assert(WoWYapIndicator.text.textValue:find('Yapping'))
+        mouseDown = nil
+        WoWYapObserver.scripts.OnUpdate()
+        assert(WoWYapIndicator.text.textValue:find('Transcribing'))
+        SlashCmdList.WOWYAP('route F9 guild')
+        assert(WoWYapDB.routes.F9 == nil)
+        SlashCmdList.WOWYAP('route shift-mouse5 party')
+        assert(WoWYapDB.routes['SHIFT-BUTTON5'] == 4)
+        SlashCmdList.WOWYAP('general General Chat')
+        assert(macros.body:find('generalChannel=General%%20Chat'))
+        local backup = macros.body
+        SlashCmdList.WOWYAP('general ' .. string.rep('x', 300))
+        assert(macros.body == backup) -- no silently truncated backup
         ''')
 
 if __name__ == '__main__': unittest.main()
