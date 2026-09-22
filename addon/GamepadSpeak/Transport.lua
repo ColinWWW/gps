@@ -1,21 +1,54 @@
--- Focus-free helper transport. F11 starts a packet, F9/F10 carry bits,
--- F12 validates and sends from its key binding's hardware-event context.
+-- Focus-free helper transport.
+-- F11 starts a packet; F9/F10/F13/F14 carry 2-bit symbols; F12 validates and sends
+-- from its key binding's hardware-event context.
+-- Protocol v2: GP + version + length + route + payload + checksum.
 -- No EditBox, movement calls, keyboard suppression, or secure snippets.
 GamepadSpeakTransport = {}
 local T = GamepadSpeakTransport
 local owner = CreateFrame("Frame")
-local packet, byte, bits, started
+local packet, symbol, bits, started
 local db, report, complete
 local channels = {SAY=true, YELL=true, PARTY=true, RAID=true, GUILD=true,
                   OFFICER=true, INSTANCE_CHAT=true}
+-- route 0 = addon's /gps channel (or SAY); others are explicit destinations.
+local destinations = {
+    [1] = "SAY", [2] = "GENERAL", [3] = "GUILD", [4] = "PARTY",
+    [5] = "RAID", [6] = "YELL", [7] = "OFFICER", [8] = "INSTANCE_CHAT",
+}
 local function reset()
-    packet, byte, bits, started = nil, 0, 0, nil
+    packet, symbol, bits, started = nil, 0, 0, nil
 end
 reset()
 
-function T.Input(symbol)
-    if not db or db.directProtocol ~= "1" then return end
-    if symbol == "start" then
+local function sendMessage(text, route)
+    local channel, target
+    if route and route > 0 then
+        channel = destinations[route]
+    else
+        channel = db.chatType or "SAY"
+    end
+    if channel == "GENERAL" then
+        local name = db.generalChannel or "General"
+        target = GetChannelName and GetChannelName(name)
+        if not target or target <= 0 then
+            report("General channel is not joined. Join it or set its name with /gps general <name>.")
+            return false
+        end
+        channel = "CHANNEL"
+    elseif not channels[channel] then
+        report("Unsupported direct chat channel.")
+        return false
+    end
+    local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
+    if not send then report("This client has no SendChatMessage API."); return false end
+    local ok, err = pcall(send, text, channel, nil, target)
+    if not ok then report("Direct send blocked: " .. tostring(err)); return false end
+    return true
+end
+
+function T.Input(symbolName)
+    if not db or db.directProtocol ~= "2" then return end
+    if symbolName == "start" then
         reset()
         -- Never deliver over a manually focused chat/settings edit box.
         if GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus() then return end
@@ -28,21 +61,22 @@ function T.Input(symbol)
         reset(); report("Direct message cancelled (timeout or text field focused).")
         return
     end
-    if symbol == "0" or symbol == "1" then
-        byte = byte * 2 + tonumber(symbol)
-        bits = bits + 1
+    local digit = tonumber(symbolName)
+    if digit and digit >= 0 and digit <= 3 then
+        symbol = symbol * 4 + digit
+        bits = bits + 2
         if bits == 8 then
-            packet[#packet+1] = byte
-            byte, bits = 0, 0
-            if #packet > 261 then reset(); report("Direct message too long.") end
+            packet[#packet+1] = symbol
+            symbol, bits = 0, 0
+            if #packet > 262 then reset(); report("Direct message too long.") end
         end
         return
     end
-    if symbol ~= "send" then reset(); return end
+    if symbolName ~= "send" then reset(); return end
     local data, partial = packet, bits
     reset() -- no retransmission or duplicate send on a repeated final key
-    if partial ~= 0 or #data < 7 or data[1] ~= 71 or data[2] ~= 80 or
-        data[3] ~= 1 or #data ~= data[4] + 6 then
+    if partial ~= 0 or #data < 8 or data[1] ~= 71 or data[2] ~= 80 or
+        data[3] ~= 2 or #data ~= data[4] + 7 then
         report("Direct message incomplete; please speak again."); return
     end
     local checksum = 0
@@ -51,19 +85,15 @@ function T.Input(symbol)
         report("Direct message checksum failed; please speak again."); return
     end
     local chars = {}
-    for i=5,#data-2 do
+    for i=6,#data-2 do
         if data[i] < 32 or data[i] == 127 then
             report("Direct message contains invalid characters."); return
         end
         chars[#chars+1] = string.char(data[i])
     end
-    local channel = db.chatType or "SAY"
-    if not channels[channel] then report("Unsupported direct chat channel."); return end
-    local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
-    if not send then report("This client has no SendChatMessage API."); return end
-    local ok, err = pcall(send, table.concat(chars), channel)
-    if not ok then report("Direct send blocked: " .. tostring(err)); return end
-    complete()
+    if sendMessage(table.concat(chars), data[5]) then
+        complete()
+    end
 end
 
 function T.Install(settings, printMessage, onComplete)
@@ -75,11 +105,14 @@ function T.Install(settings, printMessage, onComplete)
         report("Direct delivery unavailable: binding API missing."); return false
     end
     ClearOverrideBindings(owner)
-    local keys = {F9="ZERO", F10="ONE", F11="START", F12="SEND"}
+    local keys = {F9="D0", F10="D1", F13="D2", F14="D3", F11="START", F12="SEND"}
     local prefixes = {"", "SHIFT-", "CTRL-", "ALT-", "CTRL-SHIFT-",
                       "ALT-SHIFT-", "ALT-CTRL-", "ALT-CTRL-SHIFT-"}
     local trigger = (db.trigger or ""):match("([^%-]+)$")
-    if keys[trigger] then report("Choose a trigger outside F9-F12 for direct delivery."); return false end
+    if keys[trigger] then
+        report("Choose a trigger outside F9-F14 (F11/F12 reserved) for direct delivery.")
+        return false
+    end
     for key in pairs(keys) do
         for _, prefix in ipairs(prefixes) do
             local action = GetBindingAction(prefix .. key)
@@ -100,7 +133,7 @@ function T.Install(settings, printMessage, onComplete)
         ClearOverrideBindings(owner)
         report("Direct delivery bindings failed: " .. tostring(err)); return false
     end
-    db.directProtocol = "1"
-    report("Direct delivery ready (F9-F12 reserved). Chat stays closed; /reload saves helper settings.")
+    db.directProtocol = "2"
+    report("Direct delivery ready (F9/F10/F13/F14 + F11/F12 reserved). Chat stays closed; /reload saves helper settings.")
     return true
 end

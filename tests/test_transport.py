@@ -12,8 +12,8 @@ class TransportTests(TestCase):
     def setUp(self):
         self.lua = LuaRuntime()
         self.lua.execute('''
-            now=0; sent={}; notices={}; bindings={}; done=0
-            db={trigger="BUTTON4"}
+            now=0; sent={}; notices={}; bindings={}; done=0; channelTarget=nil
+            db={trigger="BUTTON4", generalChannel="General"}
             function CreateFrame() return {} end
             function GetTime() return now end
             function GetCurrentKeyBoardFocus() return focused end
@@ -21,9 +21,10 @@ class TransportTests(TestCase):
             function GetBindingAction(key) return conflict and "ACTION" or "" end
             function ClearOverrideBindings() bindings={} end
             function SetOverrideBinding(owner, priority, key, action) bindings[key]=action end
-            function SendChatMessage(text, channel)
+            function GetChannelName(name) return (name == "General") and 1 or 0 end
+            function SendChatMessage(text, channel, _, target)
                 if blocked then error("protected call") end
-                sent[#sent+1]={text=text, channel=channel}
+                sent[#sent+1]={text=text, channel=channel, target=target}
             end
             function report(s) notices[#notices+1]=s end
         ''')
@@ -34,8 +35,8 @@ class TransportTests(TestCase):
     def transfer(self, data, final=True):
         self.input('start')
         for byte in data:
-            for bit in range(7, -1, -1):
-                self.input(str((byte >> bit) & 1))
+            for shift in (6, 4, 2, 0):
+                self.input(str((byte >> shift) & 3))
         if final:
             self.input('send')
 
@@ -46,20 +47,44 @@ class TransportTests(TestCase):
         self.assertEqual(self.lua.eval('sent[1].text'), 'hello café 👋')
         self.assertEqual(self.lua.eval('sent[1].channel'), 'SAY')
         self.assertEqual(self.lua.eval('done'), 1)
-        self.assertEqual(self.lua.eval('bindings["CTRL-SHIFT-F9"]'), 'GAMEPADSPEAK_ZERO')
+        self.assertEqual(self.lua.eval('bindings["CTRL-SHIFT-F9"]'), 'GAMEPADSPEAK_D0')
+        self.assertEqual(self.lua.eval('bindings["F13"]'), 'GAMEPADSPEAK_D2')
+        self.assertEqual(self.lua.eval('db.directProtocol'), '2')
+
+    def test_route_byte_selects_guild_and_general(self):
+        self.transfer(gps.direct_packet('hi guild', route=3))
+        self.assertEqual(self.lua.eval('sent[1].channel'), 'GUILD')
+        self.transfer(gps.direct_packet('hi general', route=2))
+        self.assertEqual(self.lua.eval('sent[2].channel'), 'CHANNEL')
+        self.assertEqual(self.lua.eval('sent[2].target'), 1)
 
     def test_actual_sender_key_sequence_decodes_without_enter_or_wasd(self):
         injector = gps.Injector.__new__(gps.Injector)
-        symbols = {'F9': '0', 'F10': '1', 'F11': 'start', 'F12': 'send'}
+        injector.packet_delay = 0
+        symbols = {'F9': '0', 'F10': '1', 'F13': '2', 'F14': '3', 'F11': 'start', 'F12': 'send'}
         injector.kb = Mock()
         injector.kb.press.side_effect = lambda key: self.input(symbols[key])
-        keys = SimpleNamespace(f9='F9', f10='F10', f11='F11', f12='F12')
-        with patch.object(gps, 'Key', keys), patch.object(gps.time, 'sleep'):
-            injector.deliver_direct('keep moving')
+        keys = SimpleNamespace(f9='F9', f10='F10', f13='F13', f14='F14', f11='F11', f12='F12')
+        with patch.object(gps, 'Key', keys), patch.object(gps, 'DIRECT_SYMBOL_KEYS', ('F9', 'F10', 'F13', 'F14')), \
+                patch.object(gps.time, 'sleep'):
+            injector.deliver_direct('keep moving', route=1)
         self.assertEqual(self.lua.eval('sent[1].text'), 'keep moving')
+        self.assertEqual(self.lua.eval('sent[1].channel'), 'SAY')
         self.assertEqual(injector.kb.press.call_count, injector.kb.release.call_count)
 
-    def test_corrupt_truncated_and_partial_messages_not_sent(self):
+    def test_delivery_is_much_faster_than_legacy_bit_pacing(self):
+        injector = gps.Injector(packet_delay=0.001)
+        injector.kb = Mock()
+        sleeps = []
+        with patch.object(gps.time, 'sleep', side_effect=lambda s: sleeps.append(s)):
+            injector.deliver_direct('hello world')  # 11 payload + 7 header = 18 bytes
+        # 4 symbols/byte * 18 bytes * 1ms, and no per-bit hold sleeps.
+        self.assertEqual(len(sleeps), 18 * 4)
+        self.assertAlmostEqual(sum(sleeps), 0.072, places=3)
+        # Old bit transport was ~32ms/byte (~0.58s for this message).
+        self.assertLess(sum(sleeps), 0.15)
+
+    def test_corrupt_checksum_and_partial_messages_not_sent(self):
         data = bytearray(gps.direct_packet('hello'))
         data[5] ^= 1
         self.transfer(data)
@@ -99,24 +124,27 @@ class TransportTests(TestCase):
     def test_coordinator_leaves_wasd_and_modifiers_alone(self):
         c = hold.HoldTests().coordinator()
         c.args.delivery = 'direct'
-        c.saved = SimpleNamespace(settings=gps.AddonSettings(direct_protocol='1'))
+        c.chat_route = 3
+        c.saved = SimpleNamespace(settings=gps.AddonSettings(direct_protocol='2'))
         c.keyboard.down = {Key('w'), Key('shift_l')}
         c.keyboard.delivery_guard = None
         c.transcriber.transcribe.return_value = 'hello'
         with patch.object(gps, 'wow_is_frontmost', return_value=True), patch.object(gps, 'foreground_identity', return_value=42):
             c._finish(None)
-        c.injector.deliver_direct.assert_called_once()
+        self.assertEqual(c.injector.deliver_direct.call_args[0][:2], ('hello', 3))
         c.injector.deliver.assert_not_called()
         self.assertIsNone(c.keyboard.delivery_guard)
         self.assertEqual(len(c.keyboard.down), 2)
 
     def test_sender_aborts_without_final_send_after_focus_loss(self):
         injector = gps.Injector.__new__(gps.Injector)
+        injector.packet_delay = 0
         injector.kb = Mock()
-        keys = SimpleNamespace(f9='F9', f10='F10', f11='F11', f12='F12')
+        keys = SimpleNamespace(f9='F9', f10='F10', f13='F13', f14='F14', f11='F11', f12='F12')
         checks = iter([True, True, False])
-        with patch.object(gps, 'Key', keys), patch.object(gps.time, 'sleep'):
+        with patch.object(gps, 'Key', keys), patch.object(gps, 'DIRECT_SYMBOL_KEYS', ('F9', 'F10', 'F13', 'F14')), \
+                patch.object(gps.time, 'sleep'):
             with self.assertRaises(RuntimeError):
-                injector.deliver_direct('hello', lambda: next(checks))
+                injector.deliver_direct('hello', allowed=lambda: next(checks))
         self.assertNotIn(('F12',), [c.args for c in injector.kb.press.call_args_list])
         self.assertEqual(injector.kb.press.call_count, injector.kb.release.call_count)

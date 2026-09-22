@@ -112,13 +112,42 @@ end
 ------------------------------------------------------------------------
 local MACRO_NAME = "GPSpeak"
 local MACRO_ICON = 134400 -- INV_Misc_QuestionMark
-local PERSISTED_KEYS = { "trigger", "triggerType", "chatType", "openOnPress" }
+local PERSISTED_KEYS = { "trigger", "triggerType", "chatType", "openOnPress", "routes", "generalChannel" }
+local ROUTE_NAMES = {
+	say = 1, general = 2, guild = 3, party = 4, raid = 5, yell = 6, officer = 7, instance = 8,
+}
+local ROUTE_LABELS = {
+	[1] = "SAY", [2] = "GENERAL", [3] = "GUILD", [4] = "PARTY",
+	[5] = "RAID", [6] = "YELL", [7] = "OFFICER", [8] = "INSTANCE_CHAT",
+}
 local macroDirty = false
+
+local function EncodeRoutes(routes)
+	if type(routes) ~= "table" then return nil end
+	local parts = {}
+	for binding, route in pairs(routes) do
+		parts[#parts + 1] = binding .. ":" .. tostring(route)
+	end
+	table.sort(parts)
+	return #parts > 0 and table.concat(parts, ",") or nil
+end
+
+local function DecodeRoutes(text)
+	if not text or text == "" then return nil end
+	local out = {}
+	for binding, route in text:gmatch("([^,=]+):(%d+)") do
+		out[binding] = tonumber(route)
+	end
+	return next(out) and out or nil
+end
 
 local function Serialize(db)
 	local parts = { "#gps v1" }
 	for _, key in ipairs(PERSISTED_KEYS) do
 		local v = db[key]
+		if key == "routes" then
+			v = EncodeRoutes(v)
+		end
 		if v ~= nil and v ~= false then
 			parts[#parts + 1] = key .. "=" .. tostring(v)
 		end
@@ -133,6 +162,8 @@ local function Deserialize(body)
 	for key, value in line:gmatch("(%w+)=(%S+)") do
 		if key == "openOnPress" then
 			out[key] = (value == "true") or nil
+		elseif key == "routes" then
+			out[key] = DecodeRoutes(value)
 		else
 			out[key] = value
 		end
@@ -344,21 +375,54 @@ local function OnTriggerReleased()
 	end
 end
 
+local recordingMouse
+local mouseWasDown = {}
+
+local function CurrentMouseBinding(button)
+	local prefix = ""
+	if IsControlKeyDown and IsControlKeyDown() then prefix = prefix .. "CTRL-" end
+	if IsShiftKeyDown and IsShiftKeyDown() then prefix = prefix .. "SHIFT-" end
+	if IsAltKeyDown and IsAltKeyDown() then prefix = prefix .. "ALT-" end
+	return prefix .. button
+end
+
+local function RouteForBinding(binding, button)
+	local routes = DB and DB.routes
+	if type(routes) == "table" then
+		if routes[binding] then return routes[binding], true end
+	end
+	if DB and DB.trigger == binding then return 0, true end
+	-- A plain mouse/key trigger still fires if extra modifiers are held, unless a
+	-- more specific route above already claimed the combo.
+	if button and DB and DB.trigger == button then return 0, true end
+	return nil, false
+end
+
 -- Poll side buttons without intercepting world clicks or changing game bindings.
 -- The helper independently observes the same physical press/release on Windows.
 observer:SetScript("OnUpdate", function()
 	if capturing or not DB or not IsMouseButtonDown then return end
-	local button = ({ BUTTON4 = "Button4", BUTTON5 = "Button5" })[DB.trigger]
-	if not button then return end
-	local down = IsMouseButtonDown(button)
-	if down and not triggerHeld then OnTriggerPressed()
-	elseif not down and triggerHeld then OnTriggerReleased() end
+	for _, button in ipairs({ "BUTTON4", "BUTTON5" }) do
+		local api = button == "BUTTON4" and "Button4" or "Button5"
+		local down = IsMouseButtonDown(api)
+		if down and not mouseWasDown[button] and not triggerHeld then
+			local route, matched = RouteForBinding(CurrentMouseBinding(button), button)
+			if matched then
+				recordingMouse = button
+				OnTriggerPressed()
+			end
+		elseif not down and recordingMouse == button then
+			recordingMouse = nil
+			OnTriggerReleased()
+		end
+		mouseWasDown[button] = down
+	end
 end)
 
 local function FinishCapture(button)
 	if InCombatLockdown() then msg("Change your trigger after combat."); return end
-	if ({F9=true,F10=true,F11=true,F12=true})[button:match("([^%-]+)$")] then
-		msg("F9-F12 are reserved for direct delivery. Choose another key."); return
+	if ({F9=true,F10=true,F11=true,F12=true,F13=true,F14=true})[button:match("([^%-]+)$")] then
+		msg("F9-F14 are reserved for direct delivery. Choose another key."); return
 	end
 	capturing = false
 	ApplyObserverMode()
@@ -423,14 +487,33 @@ observer:SetScript("OnKeyDown", function(_, key)
 		end
 		return
 	end
-	if not capturing and DB and DB.trigger == KeyBinding(key) then OnTriggerPressed() end
+	if not capturing and DB then
+		local binding = KeyBinding(key)
+		local base = key
+		local _, matched = RouteForBinding(binding, base)
+		if matched then OnTriggerPressed() end
+	end
 end)
 observer:SetScript("OnKeyUp", function(_, key)
-	if triggerHeld and DB then
-		local base = DB.trigger:match("([^%-]+)$")
-		if key == base or (DB.trigger:find("CTRL%-") and not IsControlKeyDown()) or
-		   (DB.trigger:find("SHIFT%-") and not IsShiftKeyDown()) or
-		   (DB.trigger:find("ALT%-") and not IsAltKeyDown()) then OnTriggerReleased() end
+	if not triggerHeld or not DB then return end
+	local function released(binding)
+		if not binding then return false end
+		local base = binding:match("([^%-]+)$")
+		return key == base or (binding:find("CTRL%-") and not IsControlKeyDown()) or
+			(binding:find("SHIFT%-") and not IsShiftKeyDown()) or
+			(binding:find("ALT%-") and not IsAltKeyDown())
+	end
+	if released(DB.trigger) then
+		OnTriggerReleased()
+		return
+	end
+	if type(DB.routes) == "table" then
+		for binding in pairs(DB.routes) do
+			if released(binding) then
+				OnTriggerReleased()
+				return
+			end
+		end
 	end
 end)
 
@@ -498,6 +581,24 @@ mouse5:SetSize(210, 28)
 mouse5:SetPoint("TOPLEFT", 20, -305)
 mouse5:SetText("Use Mouse5 (side button)")
 mouse5:SetScript("OnClick", function() SelectMouse("BUTTON5") end)
+local routesBtn = CreateFrame("Button", "GamepadSpeakMouseRoutes", settingsPanel, "UIPanelButtonTemplate")
+routesBtn:SetSize(360, 28)
+routesBtn:SetPoint("TOPLEFT", 20, -345)
+routesBtn:SetText("Mouse4=Say, Shift+Mouse4=General, Mouse5=Guild")
+routesBtn:SetScript("OnClick", function()
+	local db = GetDB()
+	db.routes = { BUTTON4 = 1, ["SHIFT-BUTTON4"] = 2, BUTTON5 = 3 }
+	db.trigger = "BUTTON4"
+	db.triggerType = "mouse"
+	SaveToMacro()
+	msg("Routes set: Mouse4→Say, Shift+Mouse4→General, Mouse5→Guild. Reloading...")
+	ReloadUI()
+end)
+local routesHelp = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+routesHelp:SetPoint("TOPLEFT", 20, -380)
+routesHelp:SetWidth(480)
+routesHelp:SetJustifyH("LEFT")
+routesHelp:SetText("Chat routes are chosen when you press the button (Shift during Mouse4 selects General). Or use /gps route <binding> <channel>.")
 local category
 if Settings and Settings.RegisterCanvasLayoutCategory then
 	category = Settings.RegisterCanvasLayoutCategory(settingsPanel, "GamepadSpeak")
@@ -544,9 +645,20 @@ local function ShowStatus()
 	local index = GetMacroIndexByName(MACRO_NAME)
 	msg("Settings macro '" .. MACRO_NAME .. "': " .. ((index and index > 0) and "present" or "|cffff5050missing|r (beta client does not load SavedVariables; the macro is the backup)"))
 	msg("Trigger: " .. (DB.trigger and ButtonLabel(DB.trigger) or "|cffff5050not set|r (run /gps setup)"))
-	msg("Direct delivery: " .. (DB.directProtocol == "1" and "ready" or "unavailable; check startup messages"))
+	msg("Direct delivery: " .. (DB.directProtocol == "2" and "ready" or "unavailable; check startup messages"))
 	msg("Helper hotkey: " .. (DB.hotkey or "|cffff5050none|r"))
 	msg("Channel: " .. (DB.chatType or "last used (sticky)"))
+	msg("General channel name: " .. (DB.generalChannel or "General"))
+	if type(DB.routes) == "table" and next(DB.routes) then
+		local parts = {}
+		for binding, route in pairs(DB.routes) do
+			parts[#parts + 1] = ButtonLabel(binding) .. "→" .. (ROUTE_LABELS[route] or tostring(route))
+		end
+		table.sort(parts)
+		msg("Routes: " .. table.concat(parts, ", "))
+	else
+		msg("Routes: none (single trigger uses Channel above)")
+	end
 	msg("Close command: " .. ComputeCloseCommand() .. " (PAD2 is bound to '" .. tostring(GetBindingAction("PAD2")) .. "')")
 	msg("Legacy open setting (unused in hold mode): " .. (DB.openOnPress and "on" or "off") .. " (off = helper opens it with Enter)")
 	msg("Using gamepad now: " .. tostring(IsUsingGamepad and IsUsingGamepad() or false)
@@ -592,6 +704,50 @@ local function SlashHandler(input)
 		else
 			msg("Unknown channel '" .. rest .. "'.")
 		end
+	elseif cmd == "general" then
+		if rest == "" then
+			msg("Usage: /gps general <channel name>  (default: General)")
+		else
+			DB.generalChannel = rest
+			SaveToMacro()
+			msg("General channel name: " .. rest)
+		end
+	elseif cmd == "route" then
+		local binding, channel = rest:match("^(%S+)%s+(%S+)$")
+		if not binding then
+			msg("Usage: /gps route <binding> <say|general|guild|party|raid|yell|officer|instance|clear>")
+			msg("Example: /gps route BUTTON4 say   /gps route SHIFT-BUTTON4 general")
+		elseif channel:lower() == "clear" then
+			if type(DB.routes) == "table" then DB.routes[binding:upper()] = nil end
+			SaveToMacro()
+			msg("Cleared route for " .. binding:upper())
+		elseif ROUTE_NAMES[channel:lower()] then
+			DB.routes = DB.routes or {}
+			DB.routes[binding:upper()] = ROUTE_NAMES[channel:lower()]
+			if not DB.trigger then
+				DB.trigger = binding:upper():match("([^%-]+)$")
+				DB.triggerType = (DB.trigger == "BUTTON4" or DB.trigger == "BUTTON5") and "mouse" or "keyboard"
+			end
+			SaveToMacro()
+			msg(binding:upper() .. " → " .. ROUTE_LABELS[ROUTE_NAMES[channel:lower()]] .. ". /reload so the helper reads it.")
+		else
+			msg("Unknown channel '" .. channel .. "'.")
+		end
+	elseif cmd == "routes" then
+		if rest:lower() == "mouse" then
+			DB.routes = { BUTTON4 = 1, ["SHIFT-BUTTON4"] = 2, BUTTON5 = 3 }
+			DB.trigger = "BUTTON4"
+			DB.triggerType = "mouse"
+			SaveToMacro()
+			msg("Mouse routes applied. Reloading...")
+			ReloadUI()
+		elseif rest:lower() == "clear" then
+			DB.routes = nil
+			SaveToMacro()
+			msg("All chat routes cleared.")
+		else
+			msg("Usage: /gps routes mouse|clear")
+		end
 	elseif cmd == "open" then
 		DB.openOnPress = (rest:lower() == "on") or nil
 		SaveToMacro()
@@ -613,9 +769,12 @@ local function SlashHandler(input)
 		msg("  /gps setup   - pick the keyboard trigger key")
 		msg("  /gps gamepad - pick the controller trigger button")
 		msg("  /gps mouse4 or /gps mouse5 - use a mouse side button")
+		msg("  /gps routes mouse - Mouse4=Say, Shift+Mouse4=General, Mouse5=Guild")
+		msg("  /gps route <binding> <channel> - assign one chat route")
 		msg("  /gps status  - show current settings")
 		msg("  /gps test [text] - send text through the same path the helper uses")
 		msg("  /gps channel <say|party|raid|guild|officer|instance|sticky>")
+		msg("  /gps general <name> - name of the General chat channel")
 		msg("  /gps open <on|off> - addon opens chat on the second press (default off; helper uses Enter)")
 		msg("  /gps hotkey  - re-read the helper hotkey from your key bindings")
 		msg("  /gps api     - show which chat functions this client has (for debugging)")
@@ -668,7 +827,7 @@ events:SetScript("OnEvent", function(self, event, arg1, arg2)
 		end
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		ApplyObserverMode()
-		if DB and DB.directProtocol ~= "1" then
+		if DB and DB.directProtocol ~= "2" then
 			GamepadSpeakTransport.Install(DB, msg, function() SetState("idle") end)
 		end
 		if macroDirty then SaveToMacro() end
