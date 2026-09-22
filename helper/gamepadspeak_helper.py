@@ -671,12 +671,12 @@ def direct_packet(text: str, route: int = 0) -> bytes:
     return body + checksum.to_bytes(2, "big")
 
 
-# 2-bit symbols: four reserved keys, all modifier variants map to the same symbol in-game.
-DIRECT_SYMBOL_KEYS = (Key.f9, Key.f10, Key.f13, Key.f14)
+# Direct transport uses F9=0 and F10=1 only. (F13/F14 are often ignored by WoW clients.)
+DIRECT_BIT_KEYS = (Key.f9, Key.f10)
 
 
 class Injector:
-    def __init__(self, char_delay: float = 0.002, packet_delay: float = 0.001):
+    def __init__(self, char_delay: float = 0.002, packet_delay: float = 0.0025):
         self.kb = KeyboardController()
         self.char_delay = char_delay
         self.packet_delay = packet_delay
@@ -705,20 +705,29 @@ class Injector:
         self.kb.release(Key.enter)
 
     def deliver_direct(self, text: str, route: int = 0, allowed=lambda: True) -> None:
-        """Send a checked packet via 2-bit key symbols (4 taps/byte, one short pause each)."""
+        """Send a checked packet via F9/F10 bits (one pacing pause per byte)."""
         packet = direct_packet(text, route)
+
         def tap(key):
             if not allowed():
                 raise RuntimeError("Direct delivery cancelled: WoW lost focus")
-            self.kb.press(key)
-            self.kb.release(key)
+            if SYSTEM == "Windows":
+                name = getattr(key, "name", None) or str(key)
+                vk = _VK_FKEYS.get(str(name).lower())
+                if vk is None:
+                    raise RuntimeError(f"Unsupported transport key: {key}")
+                windows_tap_vk(vk, hold_seconds=0.001)
+            else:
+                self.kb.press(key)
+                time.sleep(0.001)
+                self.kb.release(key)
+
         tap(Key.f11)
         for byte in packet:
-            for shift in (6, 4, 2, 0):
-                tap(DIRECT_SYMBOL_KEYS[(byte >> shift) & 3])
-                # One pause per 2-bit symbol (~4× fewer events than bit-banging,
-                # and no second sleep while the key is held down).
-                time.sleep(self.packet_delay)
+            for shift in range(7, -1, -1):
+                tap(DIRECT_BIT_KEYS[(byte >> shift) & 1])
+            # One pause per byte (not per bit). WoW often drops symbols if this is too short.
+            time.sleep(self.packet_delay)
         tap(Key.f12)
 
     def deliver(self, text: str, open_key: Hotkey | None, close_key: Hotkey | None,
@@ -764,15 +773,11 @@ def frontmost_app_name() -> str | None:
                 )
                 return out.stdout.strip() or None
         if SYSTEM == "Windows":
-            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-            user32.GetForegroundWindow.restype = ctypes.c_void_p
-            user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
-            user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
-            hwnd = user32.GetForegroundWindow()
-            length = user32.GetWindowTextLengthW(hwnd)
-            buf = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buf, length + 1)
-            return buf.value or None
+            title, exe = windows_foreground_info()
+            # Prefer window title when present; exe catches blank-title fullscreen clients.
+            if title:
+                return title
+            return exe
         if SYSTEM == "Linux":
             out = subprocess.run(["xdotool", "getactivewindow", "getwindowname"],
                                  capture_output=True, text=True, timeout=2)
@@ -780,6 +785,51 @@ def frontmost_app_name() -> str | None:
     except Exception:
         return None
     return None
+
+
+def windows_foreground_info() -> tuple[str | None, str | None]:
+    """Return (window_title, exe_basename) for the foreground window."""
+    user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return None, None
+    user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+    user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+    length = user32.GetWindowTextLengthW(hwnd)
+    buf = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(hwnd, buf, length + 1)
+    title = buf.value or None
+
+    pid = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    exe = None
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if handle:
+        try:
+            size = ctypes.c_ulong(260)
+            path_buf = ctypes.create_unicode_buffer(260)
+            # QueryFullProcessImageNameW
+            if kernel32.QueryFullProcessImageNameW(handle, 0, path_buf, ctypes.byref(size)):
+                exe = Path(path_buf.value).name
+        finally:
+            kernel32.CloseHandle(handle)
+    return title, exe
+
+
+def looks_like_wow(title: str | None, exe: str | None = None) -> bool:
+    for value in (title, exe):
+        if not value:
+            continue
+        n = value.lower()
+        if "warcraft" in n or n.startswith("wow") or "blizzard" in n:
+            return True
+        # WoW Forever / Classic client binaries are often Wow.exe / WowClassic.exe.
+        if n in {"wow.exe", "wowclassic.exe", "wowt.exe", "wowb.exe", "world of warcraft.exe"}:
+            return True
+    return False
 
 
 def foreground_identity():
@@ -791,12 +841,60 @@ def foreground_identity():
 
 
 def wow_is_frontmost() -> bool | None:
+    """True/False when known; None when the OS could not identify the foreground app."""
+    if SYSTEM == "Windows":
+        try:
+            title, exe = windows_foreground_info()
+        except Exception:
+            return None
+        if title is None and exe is None:
+            return None
+        return looks_like_wow(title, exe)
     name = frontmost_app_name()
     if name is None:
         return None
-    n = name.lower()
-    # macOS reports the game as "Wow"; Windows titles say "World of Warcraft".
-    return "warcraft" in n or n.startswith("wow") or "blizzard" in n
+    return looks_like_wow(name)
+
+
+# Virtual-key codes for reserved transport keys.
+_VK_FKEYS = {
+    "f9": 0x78, "f10": 0x79, "f11": 0x7A, "f12": 0x7B,
+}
+
+
+def windows_tap_vk(vk: int, hold_seconds: float = 0.001) -> None:
+    """Inject a key via SendInput + scan code (more reliable for games than pynput)."""
+    user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+    MAPVK_VK_TO_VSC = 0
+    scan = user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) & 0xFF
+    ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = (("wVk", ctypes.c_ushort),
+                    ("wScan", ctypes.c_ushort),
+                    ("dwFlags", ctypes.c_ulong),
+                    ("time", ctypes.c_ulong),
+                    ("dwExtraInfo", ULONG_PTR))
+
+    class INPUT(ctypes.Structure):
+        _fields_ = (("type", ctypes.c_ulong),
+                    ("ki", KEYBDINPUT),
+                    ("padding", ctypes.c_ubyte * 8))
+
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_SCANCODE = 0x0008
+    KEYEVENTF_KEYUP = 0x0002
+
+    def emit(flags: int) -> None:
+        inp = INPUT(type=INPUT_KEYBOARD,
+                    ki=KEYBDINPUT(0, scan, flags | KEYEVENTF_SCANCODE, 0, 0))
+        if user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT)) != 1:
+            raise RuntimeError("SendInput failed while delivering packet")
+
+    emit(0)
+    if hold_seconds:
+        time.sleep(hold_seconds)
+    emit(KEYEVENTF_KEYUP)
 
 
 # ---------------------------------------------------------------------------
@@ -919,12 +1017,12 @@ class Coordinator:
             if self.saved.settings.direct_protocol != "2":
                 raise RuntimeError("Direct delivery needs the updated addon: reinstall it, enter WoW, "
                                    "check /gps status, then /reload and restart the helper")
-            reserved = {"F9", "F10", "F11", "F12", "F13", "F14"}
+            reserved = {"F9", "F10", "F11", "F12"}
             trigger_key = (self.args.button or self.saved.settings.trigger or "F8").split("-")[-1]
             if trigger_key in reserved:
-                raise RuntimeError("F9-F14 are reserved for direct delivery; choose another talk trigger")
-            log(f"Direct delivery: 2-bit transport (~{self.args.packet_delay * 1000:.1f}ms/symbol). "
-                "Chat stays closed; F9/F10/F13/F14 + F11/F12 reserved.")
+                raise RuntimeError("F9-F12 are reserved for direct delivery; choose another talk trigger")
+            log(f"Direct delivery: F9/F10 transport (~{self.args.packet_delay * 1000:.1f}ms/byte). "
+                "Chat stays closed; F9-F12 reserved.")
         self.watcher.start()
         self.keyboard.start()
         if SYSTEM == "Windows":
@@ -944,7 +1042,8 @@ class Coordinator:
                     self.cancel_recording()
                     self.apply_settings()
             if self.state in (self.RECORDING, self.FINALIZING) and not self.args.any_app:
-                if wow_is_frontmost() is not True or foreground_identity() != self.target:
+                # Only cancel when another app is clearly frontmost (not when unknown).
+                if wow_is_frontmost() is False:
                     self.cancel_recording()
             if self.state == self.RECORDING and now - self.record_start > self.args.max_seconds:
                 log("Max duration reached, stopping")
@@ -954,7 +1053,8 @@ class Coordinator:
     def on_trigger(self, route: int = 0) -> None:
         with self._lock:
             if self.state == self.IDLE:
-                if not self.args.any_app and wow_is_frontmost() is not True:
+                front = wow_is_frontmost()
+                if not self.args.any_app and front is False:
                     log(f"Trigger ignored: WoW is not detected in foreground ({frontmost_app_name() or 'unknown'})")
                     return
                 self.target = foreground_identity()
@@ -1026,7 +1126,8 @@ class Coordinator:
             if self.cancelled.is_set():
                 log("Transcript discarded after focus/settings change")
                 return
-            if not self.args.any_app and (front is not True or foreground_identity() != self.target):
+            # None = unknown OS focus; do not discard. Only skip when another app is clearly front.
+            if not self.args.any_app and front is False:
                 log(f"WoW is not the frontmost app ({frontmost_app_name()}); not typing")
                 self.sounds.play(self.sounds.error_tone)
                 return
@@ -1045,12 +1146,20 @@ class Coordinator:
                     log("Not typing while trigger/modifiers remain held")
                     return
                 time.sleep(0.01)
+
             def delivery_allowed():
-                return not self.cancelled.is_set() and (self.args.any_app or (
-                    wow_is_frontmost() is True and foreground_identity() == self.target))
+                if self.cancelled.is_set():
+                    return False
+                if self.args.any_app:
+                    return True
+                # Mid-packet: only abort when another app is known-frontmost.
+                # Unknown (None) and True both allow delivery to finish.
+                return wow_is_frontmost() is not False
+
             if direct:
                 self.injector.deliver_direct(text, self.chat_route, delivery_allowed)
-                log("Packet delivered to addon (check WoW chat for send confirmation)")
+                log("Key packet sent. In WoW you should see 'Receiving' then 'Sent: ...'. "
+                    "If not, check /gps status and that F9-F12 are free.")
             else:
                 self.keyboard.delivery_guard = delivery_allowed
                 try:
@@ -1142,9 +1251,9 @@ def main() -> None:
     ap.add_argument("--input-device", help="Mic device name or index for sounddevice")
     ap.add_argument("--delivery", choices=("direct", "chat"), default="direct",
                     help="direct (default): addon sends without opening chat; chat: legacy text injection")
-    ap.add_argument("--packet-delay", type=float, default=0.001,
-                    help="Pause after each 2-bit transport symbol in direct mode (default: 0.001s). "
-                         "Raise slightly if messages fail checksum; lower for more speed.")
+    ap.add_argument("--packet-delay", type=float, default=0.0025,
+                    help="Pause after each byte in direct mode (default: 0.0025s). "
+                         "Raise to 0.004 if WoW reports incomplete messages; lower for speed.")
     ap.add_argument("--close-command", default="auto",
                     help="Slash command typed after sending to leave the chat box. 'auto' (default) uses the one "
                          "the addon computed (the gamepad Back button's click target), 'none' skips it, "

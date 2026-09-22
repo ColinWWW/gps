@@ -1,5 +1,5 @@
 -- Focus-free helper transport.
--- F11 starts a packet; F9/F10/F13/F14 carry 2-bit symbols; F12 validates and sends
+-- F11 starts a packet; F9/F10 carry bits; F12 validates and sends
 -- from its key binding's hardware-event context.
 -- Protocol v2: GP + version + length + route + payload + checksum.
 -- No EditBox, movement calls, keyboard suppression, or secure snippets.
@@ -41,7 +41,15 @@ local function sendMessage(text, route)
     end
     local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
     if not send then report("This client has no SendChatMessage API."); return false end
-    local ok, err = pcall(send, text, channel, nil, target)
+    local ok, err
+    if channel == "CHANNEL" then
+        ok, err = pcall(send, text, channel, nil, target)
+    else
+        ok, err = pcall(send, text, channel)
+        if not ok then
+            ok, err = pcall(send, text, channel, nil, nil)
+        end
+    end
     if not ok then report("Direct send blocked: " .. tostring(err)); return false end
     return true
 end
@@ -51,20 +59,30 @@ function T.Input(symbolName)
     if symbolName == "start" then
         reset()
         -- Never deliver over a manually focused chat/settings edit box.
-        if GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus() then return end
+        if GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus() then
+            report("Direct send skipped: a text field has focus. Click the world and speak again.")
+            return
+        end
         packet, started = {}, GetTime()
+        if complete then complete("receiving") end
         return
     end
-    if not packet then return end
-    if GetTime() - started > 15 or
-        (GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus()) then
-        reset(); report("Direct message cancelled (timeout or text field focused).")
+    if not packet then
+        if symbolName == "send" then
+            report("Direct send ignored: no packet started. Update helper+addon and /reload.")
+        end
         return
+    end
+    if GetTime() - started > 15 then
+        reset(); report("Direct message cancelled (timeout)."); return
+    end
+    if GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus() then
+        reset(); report("Direct message cancelled (text field focused)."); return
     end
     local digit = tonumber(symbolName)
-    if digit and digit >= 0 and digit <= 3 then
-        symbol = symbol * 4 + digit
-        bits = bits + 2
+    if digit == 0 or digit == 1 then
+        symbol = symbol * 2 + digit
+        bits = bits + 1
         if bits == 8 then
             packet[#packet+1] = symbol
             symbol, bits = 0, 0
@@ -77,22 +95,35 @@ function T.Input(symbolName)
     reset() -- no retransmission or duplicate send on a repeated final key
     if partial ~= 0 or #data < 8 or data[1] ~= 71 or data[2] ~= 80 or
         data[3] ~= 2 or #data ~= data[4] + 7 then
-        report("Direct message incomplete; please speak again."); return
+        if data[1] == 71 and data[2] == 80 and data[3] == 1 then
+            report("Direct delivery version mismatch: update addon and helper, then /reload.")
+        else
+            report("Direct message incomplete; try a shorter phrase or raise helper --packet-delay.")
+        end
+        if complete then complete("idle") end
+        return
     end
     local checksum = 0
     for i=1,#data-2 do checksum = (checksum * 33 + data[i]) % 65521 end
     if checksum ~= data[#data-1] * 256 + data[#data] then
-        report("Direct message checksum failed; please speak again."); return
+        report("Direct message checksum failed; please speak again.")
+        if complete then complete("idle") end
+        return
     end
     local chars = {}
     for i=6,#data-2 do
         if data[i] < 32 or data[i] == 127 then
-            report("Direct message contains invalid characters."); return
+            report("Direct message contains invalid characters.")
+            if complete then complete("idle") end
+            return
         end
         chars[#chars+1] = string.char(data[i])
     end
     if sendMessage(table.concat(chars), data[5]) then
-        complete()
+        report("Sent: " .. table.concat(chars))
+        if complete then complete("idle") end
+    else
+        if complete then complete("idle") end
     end
 end
 
@@ -105,12 +136,12 @@ function T.Install(settings, printMessage, onComplete)
         report("Direct delivery unavailable: binding API missing."); return false
     end
     ClearOverrideBindings(owner)
-    local keys = {F9="D0", F10="D1", F13="D2", F14="D3", F11="START", F12="SEND"}
+    local keys = {F9="D0", F10="D1", F11="START", F12="SEND"}
     local prefixes = {"", "SHIFT-", "CTRL-", "ALT-", "CTRL-SHIFT-",
                       "ALT-SHIFT-", "ALT-CTRL-", "ALT-CTRL-SHIFT-"}
     local trigger = (db.trigger or ""):match("([^%-]+)$")
     if keys[trigger] then
-        report("Choose a trigger outside F9-F14 (F11/F12 reserved) for direct delivery.")
+        report("Choose a trigger outside F9-F12 (F11/F12 reserved) for direct delivery.")
         return false
     end
     for key in pairs(keys) do
@@ -134,6 +165,6 @@ function T.Install(settings, printMessage, onComplete)
         report("Direct delivery bindings failed: " .. tostring(err)); return false
     end
     db.directProtocol = "2"
-    report("Direct delivery ready (F9/F10/F13/F14 + F11/F12 reserved). Chat stays closed; /reload saves helper settings.")
+    report("Direct delivery ready (F9-F12 reserved). Chat stays closed; /reload saves helper settings.")
     return true
 end
