@@ -117,7 +117,6 @@ function T.Input(symbolName)
         chars[#chars+1] = string.char(data[i])
     end
     if sendMessage(table.concat(chars), data[5]) then
-        report("Sent: " .. table.concat(chars))
         if complete then complete("idle") end
     else
         if complete then complete("idle") end

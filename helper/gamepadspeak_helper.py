@@ -1249,7 +1249,7 @@ class Coordinator:
                 self.injector.deliver_direct(text, self.chat_route, delivery_allowed)
                 log(f"Timing: transcription={ms}ms delivery={int((time.monotonic()-delivery_start)*1000)}ms "
                     f"total={int((time.monotonic()-t0)*1000)}ms")
-                log("Key packet sent. In WoW you should see 'Receiving' then 'Sent: ...'. "
+                log("Key packet sent. Check the destination chat for your message. "
                     "If not, check /yap status and that F9-F12 are free.")
             else:
                 self.keyboard.delivery_guard = delivery_allowed
