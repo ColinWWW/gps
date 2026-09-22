@@ -93,6 +93,9 @@ local function SetState(newState, timeout, onTimeout)
 	elseif newState == "awaiting" then
 		indicator.text:SetText("|cffffd100\226\128\166|r  Transcribing")
 		indicator:Show()
+	elseif newState == "receiving" then
+		indicator.text:SetText("|cff69ccf0\226\150\176|r  Receiving")
+		indicator:Show()
 	else
 		indicator:Hide()
 	end
@@ -805,7 +808,13 @@ local function Init()
 	ApplyObserverMode()
 	db.closeCommand = db.trigger:match("^PAD") and ComputeCloseCommand() or "none"
 	EnsureHotkey()
-	GamepadSpeakTransport.Install(db, msg, function() SetState("idle") end)
+	GamepadSpeakTransport.Install(db, msg, function(kind)
+		if kind == "receiving" then
+			SetState("receiving", 8, function() SetState("idle") end)
+		else
+			SetState("idle")
+		end
+	end)
 	local editBox = GetEditBox()
 	if editBox then HookEditBox(editBox) end
 	if db.trigger then
@@ -828,7 +837,13 @@ events:SetScript("OnEvent", function(self, event, arg1, arg2)
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		ApplyObserverMode()
 		if DB and DB.directProtocol ~= "2" then
-			GamepadSpeakTransport.Install(DB, msg, function() SetState("idle") end)
+			GamepadSpeakTransport.Install(DB, msg, function(kind)
+				if kind == "receiving" then
+					SetState("receiving", 8, function() SetState("idle") end)
+				else
+					SetState("idle")
+				end
+			end)
 		end
 		if macroDirty then SaveToMacro() end
 	elseif event == "UPDATE_MACROS" then

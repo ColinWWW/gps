@@ -22,7 +22,7 @@ class TransportTests(TestCase):
             function ClearOverrideBindings() bindings={} end
             function SetOverrideBinding(owner, priority, key, action) bindings[key]=action end
             function GetChannelName(name) return (name == "General") and 1 or 0 end
-            function SendChatMessage(text, channel, _, target)
+            function SendChatMessage(text, channel, language, target)
                 if blocked then error("protected call") end
                 sent[#sent+1]={text=text, channel=channel, target=target}
             end
@@ -46,7 +46,7 @@ class TransportTests(TestCase):
         self.assertEqual(self.lua.eval('#sent'), 1)
         self.assertEqual(self.lua.eval('sent[1].text'), 'hello café 👋')
         self.assertEqual(self.lua.eval('sent[1].channel'), 'SAY')
-        self.assertEqual(self.lua.eval('done'), 1)
+        self.assertEqual(self.lua.eval('done'), 2)  # receiving + idle
         self.assertEqual(self.lua.eval('bindings["CTRL-SHIFT-F9"]'), 'GAMEPADSPEAK_D0')
         self.assertEqual(self.lua.eval('db.directProtocol'), '2')
 
@@ -77,8 +77,9 @@ class TransportTests(TestCase):
         sleeps = []
         with patch.object(gps.time, 'sleep', side_effect=lambda s: sleeps.append(s)):
             injector.deliver_direct('hello world')  # 11 payload + 7 header = 18 bytes
-        self.assertEqual(len(sleeps), 18)
-        self.assertAlmostEqual(sum(sleeps), 0.045, places=3)
+        # Hold sleep per tap (start + 18*8 bits + send) plus one packet_delay per byte.
+        self.assertEqual(len(sleeps), 146 + 18)
+        self.assertAlmostEqual(sum(s for s in sleeps if s >= 0.002), 0.045, places=3)
 
     def test_corrupt_checksum_and_partial_messages_not_sent(self):
         data = bytearray(gps.direct_packet('hello'))
@@ -100,7 +101,7 @@ class TransportTests(TestCase):
         self.lua.execute('blocked=true')
         self.transfer(gps.direct_packet('hello'))
         self.assertEqual(self.lua.eval('#sent'), 0)
-        self.assertEqual(self.lua.eval('done'), 0)
+        self.assertEqual(self.lua.eval('done'), 3)  # skipped start + cancelled + blocked send cleanup
         self.assertIn('Direct send blocked', self.lua.eval('notices[#notices]'))
 
     def test_binding_conflict_disables_transport(self):

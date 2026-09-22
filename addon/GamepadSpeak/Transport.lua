@@ -41,7 +41,15 @@ local function sendMessage(text, route)
     end
     local send = C_ChatInfo and C_ChatInfo.SendChatMessage or SendChatMessage
     if not send then report("This client has no SendChatMessage API."); return false end
-    local ok, err = pcall(send, text, channel, nil, target)
+    local ok, err
+    if channel == "CHANNEL" then
+        ok, err = pcall(send, text, channel, nil, target)
+    else
+        ok, err = pcall(send, text, channel)
+        if not ok then
+            ok, err = pcall(send, text, channel, nil, nil)
+        end
+    end
     if not ok then report("Direct send blocked: " .. tostring(err)); return false end
     return true
 end
@@ -51,15 +59,25 @@ function T.Input(symbolName)
     if symbolName == "start" then
         reset()
         -- Never deliver over a manually focused chat/settings edit box.
-        if GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus() then return end
+        if GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus() then
+            report("Direct send skipped: a text field has focus. Click the world and speak again.")
+            return
+        end
         packet, started = {}, GetTime()
+        if complete then complete("receiving") end
         return
     end
-    if not packet then return end
-    if GetTime() - started > 15 or
-        (GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus()) then
-        reset(); report("Direct message cancelled (timeout or text field focused).")
+    if not packet then
+        if symbolName == "send" then
+            report("Direct send ignored: no packet started. Update helper+addon and /reload.")
+        end
         return
+    end
+    if GetTime() - started > 15 then
+        reset(); report("Direct message cancelled (timeout)."); return
+    end
+    if GetCurrentKeyBoardFocus and GetCurrentKeyBoardFocus() then
+        reset(); report("Direct message cancelled (text field focused)."); return
     end
     local digit = tonumber(symbolName)
     if digit == 0 or digit == 1 then
@@ -82,22 +100,30 @@ function T.Input(symbolName)
         else
             report("Direct message incomplete; try a shorter phrase or raise helper --packet-delay.")
         end
+        if complete then complete("idle") end
         return
     end
     local checksum = 0
     for i=1,#data-2 do checksum = (checksum * 33 + data[i]) % 65521 end
     if checksum ~= data[#data-1] * 256 + data[#data] then
-        report("Direct message checksum failed; please speak again."); return
+        report("Direct message checksum failed; please speak again.")
+        if complete then complete("idle") end
+        return
     end
     local chars = {}
     for i=6,#data-2 do
         if data[i] < 32 or data[i] == 127 then
-            report("Direct message contains invalid characters."); return
+            report("Direct message contains invalid characters.")
+            if complete then complete("idle") end
+            return
         end
         chars[#chars+1] = string.char(data[i])
     end
     if sendMessage(table.concat(chars), data[5]) then
-        complete()
+        report("Sent: " .. table.concat(chars))
+        if complete then complete("idle") end
+    else
+        if complete then complete("idle") end
     end
 end
 
