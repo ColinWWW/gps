@@ -671,12 +671,12 @@ def direct_packet(text: str, route: int = 0) -> bytes:
     return body + checksum.to_bytes(2, "big")
 
 
-# 2-bit symbols: four reserved keys, all modifier variants map to the same symbol in-game.
-DIRECT_SYMBOL_KEYS = (Key.f9, Key.f10, Key.f13, Key.f14)
+# Direct transport uses F9=0 and F10=1 only. (F13/F14 are often ignored by WoW clients.)
+DIRECT_BIT_KEYS = (Key.f9, Key.f10)
 
 
 class Injector:
-    def __init__(self, char_delay: float = 0.002, packet_delay: float = 0.001):
+    def __init__(self, char_delay: float = 0.002, packet_delay: float = 0.0025):
         self.kb = KeyboardController()
         self.char_delay = char_delay
         self.packet_delay = packet_delay
@@ -705,7 +705,7 @@ class Injector:
         self.kb.release(Key.enter)
 
     def deliver_direct(self, text: str, route: int = 0, allowed=lambda: True) -> None:
-        """Send a checked packet via 2-bit key symbols (4 taps/byte, one short pause each)."""
+        """Send a checked packet via F9/F10 bits (one pacing pause per byte)."""
         packet = direct_packet(text, route)
         def tap(key):
             if not allowed():
@@ -714,11 +714,10 @@ class Injector:
             self.kb.release(key)
         tap(Key.f11)
         for byte in packet:
-            for shift in (6, 4, 2, 0):
-                tap(DIRECT_SYMBOL_KEYS[(byte >> shift) & 3])
-                # One pause per 2-bit symbol (~4× fewer events than bit-banging,
-                # and no second sleep while the key is held down).
-                time.sleep(self.packet_delay)
+            for shift in range(7, -1, -1):
+                tap(DIRECT_BIT_KEYS[(byte >> shift) & 1])
+            # One pause per byte (not per bit). WoW often drops symbols if this is too short.
+            time.sleep(self.packet_delay)
         tap(Key.f12)
 
     def deliver(self, text: str, open_key: Hotkey | None, close_key: Hotkey | None,
@@ -919,12 +918,12 @@ class Coordinator:
             if self.saved.settings.direct_protocol != "2":
                 raise RuntimeError("Direct delivery needs the updated addon: reinstall it, enter WoW, "
                                    "check /gps status, then /reload and restart the helper")
-            reserved = {"F9", "F10", "F11", "F12", "F13", "F14"}
+            reserved = {"F9", "F10", "F11", "F12"}
             trigger_key = (self.args.button or self.saved.settings.trigger or "F8").split("-")[-1]
             if trigger_key in reserved:
-                raise RuntimeError("F9-F14 are reserved for direct delivery; choose another talk trigger")
-            log(f"Direct delivery: 2-bit transport (~{self.args.packet_delay * 1000:.1f}ms/symbol). "
-                "Chat stays closed; F9/F10/F13/F14 + F11/F12 reserved.")
+                raise RuntimeError("F9-F12 are reserved for direct delivery; choose another talk trigger")
+            log(f"Direct delivery: F9/F10 transport (~{self.args.packet_delay * 1000:.1f}ms/byte). "
+                "Chat stays closed; F9-F12 reserved.")
         self.watcher.start()
         self.keyboard.start()
         if SYSTEM == "Windows":
@@ -1142,9 +1141,9 @@ def main() -> None:
     ap.add_argument("--input-device", help="Mic device name or index for sounddevice")
     ap.add_argument("--delivery", choices=("direct", "chat"), default="direct",
                     help="direct (default): addon sends without opening chat; chat: legacy text injection")
-    ap.add_argument("--packet-delay", type=float, default=0.001,
-                    help="Pause after each 2-bit transport symbol in direct mode (default: 0.001s). "
-                         "Raise slightly if messages fail checksum; lower for more speed.")
+    ap.add_argument("--packet-delay", type=float, default=0.0025,
+                    help="Pause after each byte in direct mode (default: 0.0025s). "
+                         "Raise to 0.004 if WoW reports incomplete messages; lower for speed.")
     ap.add_argument("--close-command", default="auto",
                     help="Slash command typed after sending to leave the chat box. 'auto' (default) uses the one "
                          "the addon computed (the gamepad Back button's click target), 'none' skips it, "

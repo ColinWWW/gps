@@ -35,8 +35,8 @@ class TransportTests(TestCase):
     def transfer(self, data, final=True):
         self.input('start')
         for byte in data:
-            for shift in (6, 4, 2, 0):
-                self.input(str((byte >> shift) & 3))
+            for shift in range(7, -1, -1):
+                self.input(str((byte >> shift) & 1))
         if final:
             self.input('send')
 
@@ -48,7 +48,6 @@ class TransportTests(TestCase):
         self.assertEqual(self.lua.eval('sent[1].channel'), 'SAY')
         self.assertEqual(self.lua.eval('done'), 1)
         self.assertEqual(self.lua.eval('bindings["CTRL-SHIFT-F9"]'), 'GAMEPADSPEAK_D0')
-        self.assertEqual(self.lua.eval('bindings["F13"]'), 'GAMEPADSPEAK_D2')
         self.assertEqual(self.lua.eval('db.directProtocol'), '2')
 
     def test_route_byte_selects_guild_and_general(self):
@@ -61,28 +60,25 @@ class TransportTests(TestCase):
     def test_actual_sender_key_sequence_decodes_without_enter_or_wasd(self):
         injector = gps.Injector.__new__(gps.Injector)
         injector.packet_delay = 0
-        symbols = {'F9': '0', 'F10': '1', 'F13': '2', 'F14': '3', 'F11': 'start', 'F12': 'send'}
+        symbols = {'F9': '0', 'F10': '1', 'F11': 'start', 'F12': 'send'}
         injector.kb = Mock()
         injector.kb.press.side_effect = lambda key: self.input(symbols[key])
-        keys = SimpleNamespace(f9='F9', f10='F10', f13='F13', f14='F14', f11='F11', f12='F12')
-        with patch.object(gps, 'Key', keys), patch.object(gps, 'DIRECT_SYMBOL_KEYS', ('F9', 'F10', 'F13', 'F14')), \
+        keys = SimpleNamespace(f9='F9', f10='F10', f11='F11', f12='F12')
+        with patch.object(gps, 'Key', keys), patch.object(gps, 'DIRECT_BIT_KEYS', ('F9', 'F10')), \
                 patch.object(gps.time, 'sleep'):
             injector.deliver_direct('keep moving', route=1)
         self.assertEqual(self.lua.eval('sent[1].text'), 'keep moving')
         self.assertEqual(self.lua.eval('sent[1].channel'), 'SAY')
         self.assertEqual(injector.kb.press.call_count, injector.kb.release.call_count)
 
-    def test_delivery_is_much_faster_than_legacy_bit_pacing(self):
-        injector = gps.Injector(packet_delay=0.001)
+    def test_delivery_paces_once_per_byte(self):
+        injector = gps.Injector(packet_delay=0.0025)
         injector.kb = Mock()
         sleeps = []
         with patch.object(gps.time, 'sleep', side_effect=lambda s: sleeps.append(s)):
             injector.deliver_direct('hello world')  # 11 payload + 7 header = 18 bytes
-        # 4 symbols/byte * 18 bytes * 1ms, and no per-bit hold sleeps.
-        self.assertEqual(len(sleeps), 18 * 4)
-        self.assertAlmostEqual(sum(sleeps), 0.072, places=3)
-        # Old bit transport was ~32ms/byte (~0.58s for this message).
-        self.assertLess(sum(sleeps), 0.15)
+        self.assertEqual(len(sleeps), 18)
+        self.assertAlmostEqual(sum(sleeps), 0.045, places=3)
 
     def test_corrupt_checksum_and_partial_messages_not_sent(self):
         data = bytearray(gps.direct_packet('hello'))
@@ -140,9 +136,9 @@ class TransportTests(TestCase):
         injector = gps.Injector.__new__(gps.Injector)
         injector.packet_delay = 0
         injector.kb = Mock()
-        keys = SimpleNamespace(f9='F9', f10='F10', f13='F13', f14='F14', f11='F11', f12='F12')
+        keys = SimpleNamespace(f9='F9', f10='F10', f11='F11', f12='F12')
         checks = iter([True, True, False])
-        with patch.object(gps, 'Key', keys), patch.object(gps, 'DIRECT_SYMBOL_KEYS', ('F9', 'F10', 'F13', 'F14')), \
+        with patch.object(gps, 'Key', keys), patch.object(gps, 'DIRECT_BIT_KEYS', ('F9', 'F10')), \
                 patch.object(gps.time, 'sleep'):
             with self.assertRaises(RuntimeError):
                 injector.deliver_direct('hello', allowed=lambda: next(checks))

@@ -1,5 +1,5 @@
 -- Focus-free helper transport.
--- F11 starts a packet; F9/F10/F13/F14 carry 2-bit symbols; F12 validates and sends
+-- F11 starts a packet; F9/F10 carry bits; F12 validates and sends
 -- from its key binding's hardware-event context.
 -- Protocol v2: GP + version + length + route + payload + checksum.
 -- No EditBox, movement calls, keyboard suppression, or secure snippets.
@@ -62,9 +62,9 @@ function T.Input(symbolName)
         return
     end
     local digit = tonumber(symbolName)
-    if digit and digit >= 0 and digit <= 3 then
-        symbol = symbol * 4 + digit
-        bits = bits + 2
+    if digit == 0 or digit == 1 then
+        symbol = symbol * 2 + digit
+        bits = bits + 1
         if bits == 8 then
             packet[#packet+1] = symbol
             symbol, bits = 0, 0
@@ -77,7 +77,12 @@ function T.Input(symbolName)
     reset() -- no retransmission or duplicate send on a repeated final key
     if partial ~= 0 or #data < 8 or data[1] ~= 71 or data[2] ~= 80 or
         data[3] ~= 2 or #data ~= data[4] + 7 then
-        report("Direct message incomplete; please speak again."); return
+        if data[1] == 71 and data[2] == 80 and data[3] == 1 then
+            report("Direct delivery version mismatch: update addon and helper, then /reload.")
+        else
+            report("Direct message incomplete; try a shorter phrase or raise helper --packet-delay.")
+        end
+        return
     end
     local checksum = 0
     for i=1,#data-2 do checksum = (checksum * 33 + data[i]) % 65521 end
@@ -105,12 +110,12 @@ function T.Install(settings, printMessage, onComplete)
         report("Direct delivery unavailable: binding API missing."); return false
     end
     ClearOverrideBindings(owner)
-    local keys = {F9="D0", F10="D1", F13="D2", F14="D3", F11="START", F12="SEND"}
+    local keys = {F9="D0", F10="D1", F11="START", F12="SEND"}
     local prefixes = {"", "SHIFT-", "CTRL-", "ALT-", "CTRL-SHIFT-",
                       "ALT-SHIFT-", "ALT-CTRL-", "ALT-CTRL-SHIFT-"}
     local trigger = (db.trigger or ""):match("([^%-]+)$")
     if keys[trigger] then
-        report("Choose a trigger outside F9-F14 (F11/F12 reserved) for direct delivery.")
+        report("Choose a trigger outside F9-F12 (F11/F12 reserved) for direct delivery.")
         return false
     end
     for key in pairs(keys) do
@@ -134,6 +139,6 @@ function T.Install(settings, printMessage, onComplete)
         report("Direct delivery bindings failed: " .. tostring(err)); return false
     end
     db.directProtocol = "2"
-    report("Direct delivery ready (F9/F10/F13/F14 + F11/F12 reserved). Chat stays closed; /reload saves helper settings.")
+    report("Direct delivery ready (F9-F12 reserved). Chat stays closed; /reload saves helper settings.")
     return true
 end

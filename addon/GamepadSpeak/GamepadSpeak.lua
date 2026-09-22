@@ -421,8 +421,8 @@ end)
 
 local function FinishCapture(button)
 	if InCombatLockdown() then msg("Change your trigger after combat."); return end
-	if ({F9=true,F10=true,F11=true,F12=true,F13=true,F14=true})[button:match("([^%-]+)$")] then
-		msg("F9-F14 are reserved for direct delivery. Choose another key."); return
+	if ({F9=true,F10=true,F11=true,F12=true})[button:match("([^%-]+)$")] then
+		msg("F9-F12 are reserved for direct delivery. Choose another key."); return
 	end
 	capturing = false
 	ApplyObserverMode()
