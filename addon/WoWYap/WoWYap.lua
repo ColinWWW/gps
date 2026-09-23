@@ -93,9 +93,6 @@ local function SetState(newState, timeout, onTimeout)
 	elseif newState == "awaiting" then
 		indicator.text:SetText("|cffffd100\226\128\166|r  Transcribing")
 		indicator:Show()
-	elseif newState == "receiving" then
-		indicator.text:SetText("|cff69ccf0\226\150\176|r  Receiving")
-		indicator:Show()
 	else
 		indicator:Hide()
 	end
@@ -444,10 +441,10 @@ local function FinishCapture(button)
 
 	local action = GetBindingAction(button)
 	if action and action ~= "" then
-		msg("|cffffd100Note:|r that button is also bound to '" .. action .. "' and will still do that. Run /gps setup again with a free button if that bothers you.")
+		msg("|cffffd100Note:|r that button is also bound to '" .. action .. "' and will still do that. Run /yap setup again with a free button if that bothers you.")
 	end
 	if HELPER_BLIND[button] then
-		msg("|cffff5050Warning:|r the helper cannot see this button. Pick another one with /gps setup.")
+		msg("|cffff5050Warning:|r the helper cannot see this button. Pick another one with /yap setup.")
 	end
 	-- Reload flushes SavedVariables so the helper can read the trigger. It must be
 	-- called straight from the input event; from a timer the client refuses it.
@@ -539,13 +536,13 @@ local function StartCapture(kind)
 		if capturing then
 			capturing = false
 			ApplyObserverMode()
-			msg("Setup timed out. Run /gps setup to try again.")
+			msg("Setup timed out. Run /yap setup to try again.")
 		end
 	end)
 end
 
 ------------------------------------------------------------------------
--- In-game settings, also available directly through /gps settings.
+-- In-game settings, also available directly through /yap settings.
 ------------------------------------------------------------------------
 local settingsPanel = CreateFrame("Frame", "WoWYapSettingsPanel", UIParent)
 settingsPanel.name = "WoWYap"
@@ -603,7 +600,7 @@ local routesHelp = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighl
 routesHelp:SetPoint("TOPLEFT", 20, -380)
 routesHelp:SetWidth(480)
 routesHelp:SetJustifyH("LEFT")
-routesHelp:SetText("Chat routes are chosen when you press the button (Shift during Mouse4 selects General). Or use /gps route <binding> <channel>.")
+routesHelp:SetText("Chat routes are chosen when you press the button (Shift during Mouse4 selects General). Or use /yap route <binding> <channel>.")
 local category
 if Settings and Settings.RegisterCanvasLayoutCategory then
 	category = Settings.RegisterCanvasLayoutCategory(settingsPanel, "WoWYap")
@@ -616,7 +613,7 @@ local function ShowSettings()
 	if InCombatLockdown() then msg("Open settings after combat."); return end
 	if category then Settings.OpenToCategory(category:GetID())
 	elseif InterfaceOptionsFrame_OpenToCategory then InterfaceOptionsFrame_OpenToCategory(settingsPanel)
-	else msg("Use /gps setup to change your key, or /gps gamepad for a controller.") end
+	else msg("Use /yap setup to change your key, or /yap gamepad for a controller.") end
 end
 
 ------------------------------------------------------------------------
@@ -634,7 +631,7 @@ local function EnsureHotkey()
 				bound = want
 			end
 		else
-			msg("|cffffd100Note:|r " .. want .. " is already bound to '" .. existing .. "'. Bind 'Open chat for voice text' under Key Bindings > AddOns, then run /gps hotkey.")
+			msg("|cffffd100Note:|r " .. want .. " is already bound to '" .. existing .. "'. Bind 'Open chat for voice text' under Key Bindings > AddOns, then run /yap hotkey.")
 		end
 	end
 	DB.hotkey = bound
@@ -649,7 +646,7 @@ local function ShowStatus()
 	local DB = GetDB()
 	local index = GetMacroIndexByName(MACRO_NAME)
 	msg("Settings macro '" .. MACRO_NAME .. "': " .. ((index and index > 0) and "present" or "|cffff5050missing|r (beta client does not load SavedVariables; the macro is the backup)"))
-	msg("Trigger: " .. (DB.trigger and ButtonLabel(DB.trigger) or "|cffff5050not set|r (run /gps setup)"))
+	msg("Trigger: " .. (DB.trigger and ButtonLabel(DB.trigger) or "|cffff5050not set|r (run /yap setup)"))
 	msg("Direct delivery: " .. (DB.directProtocol == "2" and "ready" or "unavailable; check startup messages"))
 	msg("Helper hotkey: " .. (DB.hotkey or "|cffff5050none|r"))
 	msg("Channel: " .. (DB.chatType or "last used (sticky)"))
@@ -712,7 +709,7 @@ local function SlashHandler(input)
 	elseif cmd == "channel" then
 		local key = rest:lower()
 		if key == "" then
-			msg("Usage: /gps channel say|yell|party|raid|guild|officer|instance|sticky")
+			msg("Usage: /yap channel say|yell|party|raid|guild|officer|instance|sticky")
 		elseif key == "sticky" then
 			DB.chatType = nil
 			SaveToMacro()
@@ -726,7 +723,7 @@ local function SlashHandler(input)
 		end
 	elseif cmd == "general" then
 		if rest == "" then
-			msg("Usage: /gps general <channel name>  (default: General)")
+			msg("Usage: /yap general <channel name>  (default: General)")
 		else
 			DB.generalChannel = rest
 			SaveToMacro()
@@ -735,8 +732,8 @@ local function SlashHandler(input)
 	elseif cmd == "route" then
 		local binding, channel = rest:match("^(%S+)%s+(%S+)$")
 		if not binding then
-			msg("Usage: /gps route <binding> <say|general|guild|party|raid|yell|officer|instance|clear>")
-			msg("Example: /gps route BUTTON4 say   /gps route SHIFT-BUTTON4 general")
+			msg("Usage: /yap route <binding> <say|general|guild|party|raid|yell|officer|instance|clear>")
+			msg("Example: /yap route BUTTON4 say   /yap route SHIFT-BUTTON4 general")
 		elseif not NormalizeRouteBinding(binding) then
 			msg("Invalid route binding. Use a supported key or Mouse4/Mouse5; F9-F12 are reserved.")
 		elseif channel:lower() == "clear" then
@@ -770,7 +767,7 @@ local function SlashHandler(input)
 			SaveToMacro()
 			msg("All chat routes cleared. /reload so the helper reads it.")
 		else
-			msg("Usage: /gps routes mouse|clear")
+			msg("Usage: /yap routes mouse|clear")
 		end
 	elseif cmd == "open" then
 		DB.openOnPress = (rest:lower() == "on") or nil
@@ -786,23 +783,23 @@ local function SlashHandler(input)
 		wipe(DB)
 		local index = GetMacroIndexByName(MACRO_NAME)
 		if index and index > 0 and not InCombatLockdown() then DeleteMacro(index) end
-		msg("Settings cleared. Run /gps setup.")
+		msg("Settings cleared. Run /yap setup.")
 	else
 		msg("Commands:")
-		msg("  /gps settings - open the in-game settings panel")
-		msg("  /gps setup   - pick the keyboard trigger key")
-		msg("  /gps gamepad - pick the controller trigger button")
-		msg("  /gps mouse4 or /gps mouse5 - use a mouse side button")
-		msg("  /gps routes mouse - Mouse4=Say, Shift+Mouse4=General, Mouse5=Guild")
-		msg("  /gps route <binding> <channel> - assign one chat route")
-		msg("  /gps status  - show current settings")
-		msg("  /gps test [text] - send text through the same path the helper uses")
-		msg("  /gps channel <say|party|raid|guild|officer|instance|sticky>")
-		msg("  /gps general <name> - name of the General chat channel")
-		msg("  /gps open <on|off> - addon opens chat on the second press (default off; helper uses Enter)")
-		msg("  /gps hotkey  - re-read the helper hotkey from your key bindings")
-		msg("  /gps api     - show which chat functions this client has (for debugging)")
-		msg("  /gps reset")
+		msg("  /yap settings - open the in-game settings panel")
+		msg("  /yap setup   - pick the keyboard trigger key")
+		msg("  /yap gamepad - pick the controller trigger button")
+		msg("  /yap mouse4 or /yap mouse5 - use a mouse side button")
+		msg("  /yap routes mouse - Mouse4=Say, Shift+Mouse4=General, Mouse5=Guild")
+		msg("  /yap route <binding> <channel> - assign one chat route")
+		msg("  /yap status  - show current settings")
+		msg("  /yap test [text] - test legacy chat-box delivery (opens chat)")
+		msg("  /yap channel <say|party|raid|guild|officer|instance|sticky>")
+		msg("  /yap general <name> - name of the General chat channel")
+		msg("  /yap open <on|off> - legacy setting; unused by hold-to-talk")
+		msg("  /yap hotkey  - re-read the helper hotkey from your key bindings")
+		msg("  /yap api     - show which chat functions this client has (for debugging)")
+		msg("  /yap reset")
 	end
 end
 
@@ -836,7 +833,7 @@ local function Init()
 	if db.trigger then
 		msg("Trigger: " .. ButtonLabel(db.trigger) .. ". Start the helper; hold to yap, release to send. /yap opens settings.")
 	else
-		msg("Type /gps settings to choose your hold-to-talk key.")
+		msg("Type /yap settings to choose your hold-to-talk key.")
 	end
 end
 

@@ -1,102 +1,72 @@
-# WoWYap — WoW hold-to-yap
+# WoWYap
 
-Based on [kubeden/gps](https://github.com/kubeden/gps). This version adds an **in-game settings panel**, keyboard triggers, and **hold-to-yap** for keyboard and controller input.
+**Hold a button. Speak. Release to send to WoW chat.**
 
-**Hold F8 → yap → release F8 → local Whisper transcription → WoW chat.**
+WoWYap pairs a WoW addon with a local speech-recognition helper. Direct delivery keeps the chat box closed so you can keep moving while your message sends.
 
-The default model is `base.en`, with English selected automatically, running on the CPU with `int8` compute. No NVIDIA CUDA libraries are required. For faster recognition, try `--model tiny.en` (or `model = tiny.en` in WoWYap.ini); it may be less accurate. An explicit `model` setting in an existing INI file takes precedence over the default. GPU users with the required CUDA libraries installed can opt in with `--device cuda`.
+- Configure keyboard, mouse, or controller triggers in game.
+- Assign different buttons to Say, General, Guild, and other chats.
+- Transcribe locally with Whisper; audio is not uploaded.
+- Start on Windows by double-clicking `Start.cmd`.
 
-This is still a WoW addon **plus an external helper**. WoW addons cannot capture the microphone or run Whisper themselves. The helper must remain running. This source targets the original WoW Forever client (Interface 16001); other Retail/Classic versions have not been validated.
+Targets **WoW Forever, Interface 16001**. Other WoW clients have not been validated.
 
-## Windows setup (double-click)
+## Download and start
 
-No PowerShell required for normal use.
+1. Open [Windows builds](https://github.com/ColinWWW/gps/actions/workflows/windows-helper.yml), select a successful run for the latest `main` commit, and download **WoWYap-Windows** under Artifacts. GitHub may require sign-in.
+2. Extract the whole archive. Keep `WoWYap.exe`, its dependency folders, and `addon` together.
+3. If WoW is in a custom location, copy [WoWYap.ini.example](WoWYap.ini.example) to `WoWYap.ini` and set `wow_dir` to your client folder, such as `D:\Games\World of Warcraft\_classic_beta_`.
+4. Double-click **Start.cmd**. It installs or updates the addon and launches the helper. The first model download takes extra time.
+5. Open WoW, enable **WoWYap**, and run `/reload`. If the helper exited while waiting for the initial setup, run **Start.cmd** again. Wait for **Ready** before speaking.
 
-1. Download the **WoWYap-Windows** artifact from [GitHub Actions](../../actions) (**Build Windows helper**), or use this repository checkout.
-2. Close WoW. Double-click **`Start.cmd`**.
-   - It copies/updates the addon into WoW automatically.
-   - It starts the helper and keeps a console window open (leave it open while you play).
-3. In WoW, enable **WoWYap** if prompted, then type **`/reload`**.
-4. Open **`/yap`** (or Options → AddOns → WoWYap), pick your hold-to-yap key or mouse button, then speak.
+Keep the helper running while you play. Open **`/yap`** for settings; **F8** is the initial talk key. Hold your chosen button to record, then release it to send.
 
-If WoW is not under the default Program Files path, edit **`WoWYap.ini`** next to `Start.cmd` (a template is created on first run; see `WoWYap.ini.example`).
+| Launcher | Purpose |
+| --- | --- |
+| `Start.cmd` | Install/update the addon and run the helper; use this normally |
+| `Install.cmd` | Install/update the addon only; not required before Start |
+| `Check.cmd` | Show microphone, settings, and WoW-path diagnostics |
 
-| Double-click | What it does |
-|---|---|
-| **Start.cmd** | Sync addon + run helper (daily use) |
-| **Install.cmd** | Sync addon only, then exit |
-| **Check.cmd** | Print mic / WoW path / settings diagnostics |
+## Chat bindings
 
-`install.ps1` / `run-helper.ps1` still work if you prefer PowerShell.
+In `/yap settings`, choose **Mouse4=Say, Shift+Mouse4=General, Mouse5=Guild**, or run `/yap routes mouse`.
 
-### Updating
+| Hold | Destination with the mouse preset |
+| --- | --- |
+| Mouse4 | Say |
+| Shift + Mouse4 | General |
+| Mouse5 | Guild |
 
-Replace the folder with a newer Actions build (or `git pull`), then double-click **Start.cmd** again. The helper refreshes the addon in WoW; type **`/reload`** in game when it says the addon was updated.
+Hold the modifier before pressing the mouse button. The destination stays fixed for that recording, even if you release Shift first.
 
-### From source (developers)
+For a custom binding, use `/yap route SHIFT-BUTTON5 party`, then `/reload`. Supported destinations are `say`, `general`, `guild`, `party`, `raid`, `yell`, `officer`, and `instance`. Use `clear` as the destination to remove a binding.
 
-Install [Python 3.12+](https://www.python.org/downloads/) (or [uv](https://github.com/astral-sh/uv)). Double-click **Start.cmd** — it creates a local `.venv` on first run. Optional: `run-helper.ps1 --language en`.
+**Keep F9–F12 and their modifier combinations unbound**; WoWYap reserves them for delivery. Existing game actions on your talk buttons still fire. General must be joined; `/yap general <name>` selects its localized channel name.
 
-## In-game options
+## Recognition model
 
-F8 is the default. Click **Change keyboard key**, then press your desired key, optionally with Ctrl, Shift, or Alt. **Selecting the key saves it and reloads the UI.** Escape cancels. The helper reads the saved setting within about two seconds. If the client refuses the automatic reload, type `/reload`.
+The default is **`base.en`**, running in English on the CPU with `int8` compute. No CUDA installation is needed.
 
-Supported keyboard keys: F1–F8 and F15–F20 (where supported by your client; F9–F12 are reserved for delivery), A–Z, 0–9, Insert/Delete, Home/End, Page Up/Down, and arrow keys, with optional Ctrl/Shift/Alt. Use an unused key: existing game actions are not unbound. On Windows, select **Use Mouse4** or **Use Mouse5** in `/yap settings` (or run `/yap mouse4` / `/yap mouse5`). These are the physical back/forward side buttons; mouse software must not remap them to keyboard keys. Selecting one saves and reloads the UI. Existing mouse bindings still fire. Direct delivery supports held modifiers and movement keys.
+**`tiny.en` may be faster, but less accurate.** To choose a model, set it under `[wowyap]` in `WoWYap.ini` and restart the helper:
 
-For multiple chat destinations, click **Mouse4=Say, Shift+Mouse4=General, Mouse5=Guild** in `/yap settings`, or run `/yap routes mouse`. The destination is chosen when you press the button (so releasing Shift mid-recording still goes to General). Custom routes: `/yap route BUTTON4 say`, `/yap route SHIFT-BUTTON4 general`, `/yap route BUTTON5 guild`. Use `/yap general <name>` if your General channel is localized.
-
-For a controller, click **Change controller button**, or use `/yap gamepad`. Controller buttons and trigger axes now also use hold/release instead of toggle. Direct delivery does not open chat for either keyboard, mouse, or controller triggers. The original gamepad chat-closing workaround is only used with `--delivery chat`.
-
-Recording cues are now quieter, lower-pitched single tones with smooth fades. Use `--silent` to disable them entirely.
-
-## Options and troubleshooting
-
-- `/yap setup`: choose a keyboard key and reload.
-- `/yap status`: inspect settings.
-- `Check.cmd` or `run-helper.ps1 --check`: inspect microphone, settings path and foreground detection.
-- `Start.cmd --input-device "Microphone name"`: select a microphone.
-- `Start.cmd --model small --language en`: choose recognition settings.
-- Edit `WoWYap.ini` or pass `--wow-dir "C:\path\to\_classic_beta_"`: point the helper at the same WoW installation as the addon.
-- `Start.cmd --button F8`: temporary helper-only override; normally use the in-game setting so the indicator agrees.
-
-Recording starts only when WoW is detected in the foreground. Leaving WoW cancels the recording or pending delivery. Failure to identify the foreground window also prevents recording. Recordings are capped at 60 seconds by default. If the talk trigger remains held for five seconds after transcription, delivery is discarded. In legacy chat mode, held modifiers also delay delivery. Empty speech, microphone and transcription failures return the helper to idle.
-
-The addon hides its indicator when direct delivery begins; there is no Receiving banner or duplicate Sent message. The helper cannot receive an acknowledgment from WoW: “Packet delivered” confirms only that the keystrokes were emitted. Check game chat for the actual message or an addon error. The indicator may show “Transcribing” briefly after cancelled or empty speech. The original beta's settings-macro backup is preserved; do not edit the `WoWYap` macro.
-
-The helper records/transcribes locally. Model downloads need internet; audio is not uploaded. Transcripts appear in the helper console and are sent to WoW chat.
-
-## Performance / language choice
-
-Whisper inference already runs through native CTranslate2, but delivery also contributes latency. Earlier versions slept once per **bit**, rebuilt Windows input structures per key, and queried the foreground process per tap. The Windows sender now caches scan codes and sends each byte's 16 key events in one `SendInput` call, with only the configured pause between bytes. Focus is checked against the verified game window before each batch; movement keys are never released or blocked.
-
-At the default 2.5 ms byte pause, a 100-byte message has **267.5 ms of deliberate pacing**, down from about **1,125.5 ms** including the old 1 ms per-key holds. These are scheduled delays, not measured end-to-end latency; OS scheduling, WoW, and transcription add time. The console now reports separate `transcription=...ms`, `delivery=...ms`, and total processing times.
-
-The default is `base.en` / CPU / int8. `tiny.en` is the faster option when you can accept potentially lower recognition accuracy. If WoW reports incomplete packets with batched input, try `Start.cmd --key-hold 0.001 --packet-delay 0.004` to restore individually held keys. You can also put `key_hold = 0.001` and `packet_delay = 0.004` in WoWYap.ini. Default `key_hold = 0` is faster. Both modes use the same checked protocol and preserve chat routes. No live Windows/WoW speedup is claimed from mock tests.
-
-## Windows executable build
-
-The **Build Windows helper** GitHub Actions workflow builds a console `.exe`, bundles the addon, and includes **Start.cmd** / **Install.cmd** / **Check.cmd**. Run it from the repository's Actions tab, then download the `WoWYap-Windows` artifact. Extract the folder anywhere and double-click **Start.cmd**. The `.exe` accepts the same helper options, including `--wow-dir`.
-
-A successful workflow run is required before claiming a working executable. Live microphone capture, key delivery, and addon behavior must still be checked inside WoW on Windows.
-
-## Development checks
-
-Install helper dependencies and `lupa`, then run:
-
-```powershell
-python -m unittest discover -s tests -v
+```ini
+[wowyap]
+model = base.en
 ```
 
-Tests cover key repeats, short controller holds, modifier release order, focus restrictions, error recovery, settings selection/persistence, addon sync, and the addon recording/release indicator using a stubbed WoW API. They do not replace an in-game integration test.
+An existing explicit `model` setting overrides the default. To try the faster option, change that line to `model = tiny.en`. Lines starting with `#` are comments.
 
-## Direct delivery (no chat focus)
+## Update
 
-Default `--delivery direct` sends a versioned UTF-8 packet to the addon through F9/F10 (bits), F11 (start) and F12 (send). The addon checks length and checksum, then calls the chat API from the final key binding. It never focuses an edit box, stops movement, or suppresses physical keys. Keep holding WASD. Reserved bindings are installed out of combat and remain available during combat; this beta client still requires live validation.
+Stop the helper, extract the latest successful Windows build into a new folder, and copy your **WoWYap.ini** into it. Run **Start.cmd**, then `/reload` in WoW. The saved in-game bindings stay in WoW's settings.
 
-Both addon **and helper** must be updated. Enter WoW and run `/reload` before restarting the helper so it can read the new protocol setting. If F9–F12 or their modifier combinations have existing actions, the addon reports the conflict and disables direct delivery until those bindings are freed and the UI reloaded. Existing bindings are not deleted. Choose a talk trigger outside F9–F12. Keys are temporarily reserved while the addon is loaded.
+For a source checkout, see the [development guide](docs/development.md). Avoid mixing a source update with an older executable: `Start.cmd` launches the executable when one is present.
 
-Direct delivery uses `/yap channel` (default SAY; `sticky` also means SAY in this mode) unless a chat route was selected when you pressed the talk button. Each message is limited to 255 UTF-8 bytes; longer messages produce an error asking for a shorter sentence. Partial, corrupted, or timed-out packets are discarded. A manually focused text field prevents a send. Focus loss cancels helper delivery. This is an ordinary key-input/addon-API path, not memory access or a game-client modification.
+## Help and project information
 
-On Windows, transport batches eight F9/F10 taps per UTF-8 byte with one pause after each byte (default `--packet-delay 0.0025`, about 2.5 ms/byte), while movement continues. If WoW reports **Direct message incomplete**, use compatibility pacing: `Start.cmd --key-hold 0.001 --packet-delay 0.004`. If the client drops input, the checksum rejects the message rather than posting broken text. SendChatMessage restrictions vary by client; a blocked call is reported in-game. We cannot validate the WoW Forever beta from automated tests. If it rejects direct sends, report the in-game error; the helper never silently falls back to opening chat.
+- [Troubleshooting and settings](docs/troubleshooting.md)
+- [Development, tests, and transport](docs/development.md)
+- [Changelog](CHANGELOG.md)
+- [Report a bug](https://github.com/ColinWWW/gps/issues)
 
-`--delivery chat` explicitly restores the legacy method, which opens chat and may interrupt movement. On Windows that legacy method briefly suppresses physical key-downs during typing to prevent WASD appearing in the message.
+Based on [kubeden/gps](https://github.com/kubeden/gps). Speech recognition uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and [Whisper](https://github.com/openai/whisper).

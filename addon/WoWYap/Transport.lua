@@ -10,7 +10,7 @@ local packet, symbol, bits, started
 local db, report, complete
 local channels = {SAY=true, YELL=true, PARTY=true, RAID=true, GUILD=true,
                   OFFICER=true, INSTANCE_CHAT=true}
--- route 0 = addon's /gps channel (or SAY); others are explicit destinations.
+-- route 0 = addon's /yap channel (or SAY); others are explicit destinations.
 local destinations = {
     [1] = "SAY", [2] = "GENERAL", [3] = "GUILD", [4] = "PARTY",
     [5] = "RAID", [6] = "YELL", [7] = "OFFICER", [8] = "INSTANCE_CHAT",
@@ -31,7 +31,7 @@ local function sendMessage(text, route)
         local name = db.generalChannel or "General"
         target = GetChannelName and GetChannelName(name)
         if not target or target <= 0 then
-            report("General channel is not joined. Join it or set its name with /gps general <name>.")
+            report("General channel is not joined. Join it or set its name with /yap general <name>.")
             return false
         end
         channel = "CHANNEL"

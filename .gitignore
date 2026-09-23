@@ -3,3 +3,12 @@ __pycache__/
 *.pyc
 .DS_Store
 WoWYap.ini
+
+# Generated packages and local development files
+.venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+package/
+*.spec

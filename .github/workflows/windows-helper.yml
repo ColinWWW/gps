@@ -26,7 +26,8 @@ jobs:
           Copy-Item -Recurse helper/dist/WoWYap/* $out/
           New-Item -ItemType Directory -Force -Path "$out/addon" | Out-Null
           Copy-Item -Recurse addon/WoWYap "$out/addon/WoWYap"
-          Copy-Item Start.cmd, Check.cmd, Install.cmd, WoWYap.ini.example, README.md $out/
+          Copy-Item Start.cmd, Check.cmd, Install.cmd, WoWYap.ini.example, README.md, CHANGELOG.md $out/
+          Copy-Item -Recurse docs "$out/docs"
           # Frozen exe lives next to Start.cmd; app_root() finds addon/WoWYap.
           Get-ChildItem $out | Select-Object Name
       - uses: actions/upload-artifact@v4
