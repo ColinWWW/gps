@@ -13,7 +13,7 @@ local channels = {SAY=true, YELL=true, PARTY=true, RAID=true, GUILD=true,
 -- route 0 = addon's /yap channel (or SAY); others are explicit destinations.
 local destinations = {
     [1] = "SAY", [2] = "GENERAL", [3] = "GUILD", [4] = "PARTY",
-    [5] = "RAID", [6] = "YELL", [7] = "OFFICER", [8] = "INSTANCE_CHAT",
+    [5] = "RAID", [6] = "YELL", [7] = "OFFICER", [8] = "INSTANCE_CHAT", [9] = "AI",
 }
 local function reset()
     packet, symbol, bits, started = nil, 0, 0, nil
@@ -26,6 +26,36 @@ local function sendMessage(text, route)
         channel = destinations[route]
     else
         channel = db.chatType or "SAY"
+    end
+    if channel == "AI" then
+        -- Call the message API, never the slash-command parser: dictated words
+        -- such as "delete" or "reset" must remain ordinary prompt text.
+        local ai, state = WoWAI, WoWAIDB
+        if type(ai) ~= "table" or type(ai.Send) ~= "function" or
+            type(ai.IsConnected) ~= "function" or type(state) ~= "table" then
+            report("WoW AI is not ready. Install/enable WoWAI and connect its bridge first.")
+            return false
+        end
+        if not state.settings or state.settings.mode ~= "pixel" then
+            report("Voice to AI requires /wow-ai mode pixel; reload mode interrupts movement.")
+            return false
+        end
+        if not ai.IsConnected() then
+            report("WoW AI is disconnected. Start its bridge and connect with /wow-ai first.")
+            return false
+        end
+        local active
+        for _, chat in ipairs(state.chats or {}) do
+            if chat.id == state.activeChat then active = chat; break end
+        end
+        if not active then report("Select a chat in /wow-ai first."); return false end
+        if active.pendingId then
+            report("WoW AI is still answering. Wait or select another AI chat, then speak again.")
+            return false
+        end
+        local ok, err = pcall(ai.Send, text)
+        if not ok then report("WoW AI send failed: " .. tostring(err)); return false end
+        return true
     end
     if channel == "GENERAL" then
         local name = db.generalChannel or "General"

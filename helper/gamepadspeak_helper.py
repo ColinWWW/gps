@@ -706,7 +706,7 @@ def direct_packet(text: str, route: int = 0) -> bytes:
         raise ValueError("Direct messages must contain 1-255 UTF-8 bytes; try a shorter sentence")
     if any(b < 32 or b == 127 for b in payload):
         raise ValueError("Invalid control character in transcript")
-    if route not in range(9):
+    if route not in range(10):
         raise ValueError("Invalid chat route")
     body = b"GP\x02" + bytes([len(payload), route]) + payload
     checksum = 0

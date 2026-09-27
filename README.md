@@ -39,9 +39,28 @@ In `/yap settings`, choose **Mouse4=Say, Shift+Mouse4=General, Mouse5=Guild**, o
 
 Hold the modifier before pressing the mouse button. The destination stays fixed for that recording, even if you release Shift first.
 
-For a custom binding, use `/yap route SHIFT-BUTTON5 party`, then `/reload`. Supported destinations are `say`, `general`, `guild`, `party`, `raid`, `yell`, `officer`, and `instance`. Use `clear` as the destination to remove a binding.
+For a custom binding, use `/yap route SHIFT-BUTTON5 party`, then `/reload`. Supported destinations are `say`, `general`, `guild`, `party`, `raid`, `yell`, `officer`, `instance`, and `ai` (optional WoW AI integration). Use `clear` as the destination to remove a binding.
 
 **Keep F9–F12 and their modifier combinations unbound**; WoWYap reserves them for delivery. Existing game actions on your talk buttons still fire. General must be joined; `/yap general <name>` selects its localized channel name.
+
+## Speak to WoW AI
+
+WoWYap can send speech to the selected chat in [chelinho139/wow-ai](https://github.com/chelinho139/wow-ai), without opening the chat box. Your existing Say/Guild bindings keep working.
+
+1. Install WoW AI using its own setup instructions, in the **same WoW client folder** as WoWYap. Fully restart WoW after adding it.
+2. Start both the WoWYap helper and the WoW AI bridge. Open `/wow-ai`, connect, and select your chat, agent, and project folder. Use `/wow-ai mode pixel` (the normal mode).
+3. Add a voice binding and save it:
+
+   ```text
+   /yap route SHIFT-BUTTON5 ai
+   /reload
+   ```
+
+4. Hold Shift+Mouse5, speak, and release. Click the world first if a text field has focus. The prompt goes to whichever AI chat is selected **when delivery finishes**; replies appear through WoW AI.
+
+The AI destination requires direct delivery and an idle, connected AI chat. If it is busy or disconnected, WoWYap reports the problem; speak again after resolving it. It does not queue or retry prompts. Each utterance has the existing 255-byte transport limit. Keep WoW AI's hotkey outside F9–F12.
+
+Recognition stays local, but **AI-routed text is sent to the agent/provider configured in WoW AI**, with that chat's existing project access and permissions. WoWYap does not change them. The current integration uses WoW AI's `Send` API and pixel mode; it does not install the other project or launch its bridge automatically.
 
 ## Recognition model
 

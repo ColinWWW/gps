@@ -50,6 +50,33 @@ class TransportTests(TestCase):
         self.assertEqual(self.lua.eval('bindings["CTRL-SHIFT-F9"]'), 'WOWYAP_D0')
         self.assertEqual(self.lua.eval('db.directProtocol'), '2')
 
+    def setup_ai(self):
+        self.lua.execute('''
+            aiSent={}; connected=true
+            WoWAIDB={settings={mode="pixel"}, activeChat="a", chats={{id="a"}}}
+            WoWAI={IsConnected=function() return connected end,
+                Send=function(text) aiSent[#aiSent+1]=text end}
+        ''')
+
+    def test_ai_route_sends_literal_prompt_once_without_public_chat(self):
+        self.setup_ai()
+        self.transfer(gps.direct_packet('reset', route=9))
+        self.input('send')
+        self.assertEqual(self.lua.eval('#sent'), 0)
+        self.assertEqual(self.lua.eval('#aiSent'), 1)
+        self.assertEqual(self.lua.eval('aiSent[1]'), 'reset')
+
+    def test_ai_route_refuses_unavailable_busy_and_reload_mode(self):
+        self.transfer(gps.direct_packet('private prompt', route=9))
+        self.assertIn('not ready', self.lua.eval('notices[#notices]'))
+        for change in ('connected=false', 'WoWAIDB.settings.mode="reload"',
+                       'WoWAIDB.chats[1].pendingId=42', 'WoWAIDB.activeChat="missing"'):
+            self.setup_ai()
+            self.lua.execute(change)
+            self.transfer(gps.direct_packet('private prompt', route=9))
+            self.assertEqual(self.lua.eval('#aiSent'), 0)
+            self.assertEqual(self.lua.eval('#sent'), 0)
+
     def test_route_byte_selects_guild_and_general(self):
         self.transfer(gps.direct_packet('hi guild', route=3))
         self.assertEqual(self.lua.eval('sent[1].channel'), 'GUILD')

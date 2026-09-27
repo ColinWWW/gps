@@ -2,7 +2,8 @@
 ## Title: WoWYap
 ## Notes: Hold a key or mouse button, yap, release to send. Requires the external helper.
 ## Author: kubeden
-## Version: 0.5.2
+## Version: 0.5.3
+## OptionalDeps: WoWAI
 ## SavedVariables: WoWYapDB
 ## IconTexture: Interface\Icons\Ability_Warrior_BattleShout
 

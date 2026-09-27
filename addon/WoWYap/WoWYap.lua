@@ -114,11 +114,11 @@ local MACRO_NAME = "WoWYap"
 local MACRO_ICON = 134400 -- INV_Misc_QuestionMark
 local PERSISTED_KEYS = { "trigger", "triggerType", "chatType", "openOnPress", "routes", "generalChannel" }
 local ROUTE_NAMES = {
-	say = 1, general = 2, guild = 3, party = 4, raid = 5, yell = 6, officer = 7, instance = 8,
+	say = 1, general = 2, guild = 3, party = 4, raid = 5, yell = 6, officer = 7, instance = 8, ai = 9,
 }
 local ROUTE_LABELS = {
 	[1] = "SAY", [2] = "GENERAL", [3] = "GUILD", [4] = "PARTY",
-	[5] = "RAID", [6] = "YELL", [7] = "OFFICER", [8] = "INSTANCE_CHAT",
+	[5] = "RAID", [6] = "YELL", [7] = "OFFICER", [8] = "INSTANCE_CHAT", [9] = "AI",
 }
 local macroDirty = false
 
@@ -732,7 +732,7 @@ local function SlashHandler(input)
 	elseif cmd == "route" then
 		local binding, channel = rest:match("^(%S+)%s+(%S+)$")
 		if not binding then
-			msg("Usage: /yap route <binding> <say|general|guild|party|raid|yell|officer|instance|clear>")
+			msg("Usage: /yap route <binding> <say|general|guild|party|raid|yell|officer|instance|ai|clear>")
 			msg("Example: /yap route BUTTON4 say   /yap route SHIFT-BUTTON4 general")
 		elseif not NormalizeRouteBinding(binding) then
 			msg("Invalid route binding. Use a supported key or Mouse4/Mouse5; F9-F12 are reserved.")

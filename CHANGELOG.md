@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.3
+
+- Optional WoW AI voice destination: `/yap route SHIFT-BUTTON5 ai`.
+- Reject disconnected, busy, or reload-mode AI delivery without opening chat or retrying prompts.
+
 ## Unreleased
 
 - Reorganize setup, troubleshooting, and development documentation.
